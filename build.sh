@@ -13,8 +13,7 @@ CP="$(jar1 'org.eclipse.ui_*.jar');$(jar1 'org.eclipse.ui.workbench_*.jar');$(ja
 
 rm -rf bin && mkdir -p bin dist
 "$G/jdk/bin/javac.exe" --release 17 -encoding UTF-8 -cp "$CP" -d bin \
-    src/gama/ui/claude/views/ChatView.java \
-    src/gama/ui/claude/OpenViewAtStartup.java
+    $(find src -name '*.java')
 "$G/jdk/bin/jar.exe" --create --file "dist/$JAR" --manifest META-INF/MANIFEST.MF plugin.xml -C bin .
 
 # cai vao GAMA (bundles.info da co dong dang ky tu lan dau, chi can thay jar)

@@ -1,20 +1,33 @@
 package gama.ui.claude.views;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 
+import org.eclipse.core.resources.IFile;
 import org.eclipse.core.resources.IMarker;
 import org.eclipse.core.resources.IResource;
 import org.eclipse.core.resources.IResourceChangeEvent;
 import org.eclipse.core.resources.IResourceChangeListener;
 import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.resources.WorkspaceJob;
 import org.eclipse.core.runtime.CoreException;
+import org.eclipse.core.runtime.IProgressMonitor;
+import org.eclipse.core.runtime.IStatus;
+import org.eclipse.core.runtime.Status;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.browser.BrowserFunction;
 import org.eclipse.swt.custom.SashForm;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -23,62 +36,78 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
-import org.eclipse.core.resources.IFile;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.part.ViewPart;
 
 /**
- * M1: quet marker GAML ra JSON, loc rac thu vien built-in, uu tien file dang mo,
- * tu re-scan khi marker doi. Day la "nhip tim" cho vong auto-fix cua agent o M3.
- * M2 se thay placeholder browser bang chat that noi voi agent Python.
+ * M2: chat that. JS trong Browser -> claudeSend() -> subprocess Python (JSON lines)
+ * -> claudeRecv() day ve JS. Sau moi luot agent: refreshLocal de Xtext re-validate,
+ * marker listener tu do JSON diagnostics moi -> luot chat sau co context tuoi.
+ *
+ * Config: %USERPROFILE%\.gama-claude.properties  (python=..., script=..., key=...)
  */
 public class ChatView extends ViewPart {
 
 	public static final String ID = "gama.ui.claude.views.ChatView";
 
-	/** File JSON cho agent CLI ben ngoai doc. */
 	private static final String OUT_FILE =
 			System.getProperty("java.io.tmpdir") + File.separator + "gama_claude_markers.json";
+	private static final String ERR_LOG =
+			System.getProperty("java.io.tmpdir") + File.separator + "gama_claude_agent.log";
 
+	private Browser browser;
 	private Text log;
 	private IResourceChangeListener markerListener;
 
+	private Process agentProc;
+	private BufferedWriter agentIn;
+	/** JSON array cua diagnostics lan quet gan nhat - dinh kem moi message chat. */
+	private volatile String lastDiagArray = "[]";
+	private volatile String lastActiveFile = null;
+
 	private record Diag(String file, int line, int sev, String msg) {}
+
+	// ------------------------------------------------------------------ UI
 
 	@Override
 	public void createPartControl(final Composite parent) {
 		final SashForm sash = new SashForm(parent, SWT.VERTICAL);
 
-		// tren: browser lam khung chat (WebView2 tren Win11)
 		try {
-			final Browser b = new Browser(sash, SWT.EDGE);
-			b.setText(placeholderHtml());
+			browser = new Browser(sash, SWT.EDGE);
 		} catch (final Throwable t1) {
 			try {
-				final Browser b = new Browser(sash, SWT.NONE);
-				b.setText(placeholderHtml());
+				browser = new Browser(sash, SWT.NONE);
 			} catch (final Throwable t2) {
 				final Label l = new Label(sash, SWT.WRAP);
 				l.setText("Browser khong tao duoc: " + t2);
 			}
 		}
+		if (browser != null) {
+			browser.setText(chatHtml());
+			// JS goi: claudeSend("noi dung user go")
+			new BrowserFunction(browser, "claudeSend") {
+				@Override
+				public Object function(final Object[] args) {
+					if (args != null && args.length > 0 && args[0] instanceof String s) {
+						sendChat(s);
+					}
+					return null;
+				}
+			};
+		}
 
-		// duoi: panel diagnostics
 		final Composite bottom = new Composite(sash, SWT.NONE);
 		bottom.setLayout(new GridLayout(1, false));
-
 		final Button scan = new Button(bottom, SWT.PUSH);
 		scan.setText("Scan GAML errors → JSON  (tu chay lai khi marker doi)");
 		scan.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-
 		log = new Text(bottom, SWT.MULTI | SWT.READ_ONLY | SWT.V_SCROLL | SWT.H_SCROLL | SWT.BORDER);
 		log.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 		log.setText("Dang cho marker dau tien... (sua/save mot file .gaml la thay)");
-
 		scan.addListener(SWT.Selection, e -> scanMarkers());
-		sash.setWeights(new int[] { 55, 45 });
+		sash.setWeights(new int[] { 70, 30 });
 
-		// tu re-scan moi khi markers trong workspace thay doi (save file -> Xtext validate lai)
 		markerListener = event -> {
 			if (event.getType() == IResourceChangeEvent.POST_CHANGE) {
 				Display.getDefault().asyncExec(() -> {
@@ -89,7 +118,97 @@ public class ChatView extends ViewPart {
 		ResourcesPlugin.getWorkspace().addResourceChangeListener(markerListener, IResourceChangeEvent.POST_CHANGE);
 	}
 
-	/** Duong dan file .gaml dang mo trong editor, hoac null. */
+	// ------------------------------------------------------------- agent
+
+	private synchronized void ensureAgent() throws IOException {
+		if (agentProc != null && agentProc.isAlive()) { return; }
+
+		final Properties p = new Properties();
+		final Path cfg = Paths.get(System.getProperty("user.home"), ".gama-claude.properties");
+		if (Files.exists(cfg)) {
+			try (var r = Files.newBufferedReader(cfg, StandardCharsets.UTF_8)) { p.load(r); }
+		} else {
+			throw new IOException("Thieu file config: " + cfg
+					+ "  (can python=..., script=..., key=sk-ant-...)");
+		}
+		final String python = p.getProperty("python", "python");
+		final String script = p.getProperty("script", "");
+		if (script.isBlank() || !Files.exists(Paths.get(script))) {
+			throw new IOException("'script' trong .gama-claude.properties khong ton tai: " + script);
+		}
+
+		final ProcessBuilder pb = new ProcessBuilder(python, script);
+		final String key = p.getProperty("key", "").trim();
+		if (!key.isEmpty()) { pb.environment().put("ANTHROPIC_API_KEY", key); }
+		pb.redirectErrorStream(false);
+		agentProc = pb.start();
+		agentIn = new BufferedWriter(new OutputStreamWriter(agentProc.getOutputStream(), StandardCharsets.UTF_8));
+
+		// stdout -> claudeRecv tung dong
+		final BufferedReader out = new BufferedReader(
+				new InputStreamReader(agentProc.getInputStream(), StandardCharsets.UTF_8));
+		new Thread(() -> {
+			try {
+				String line;
+				while ((line = out.readLine()) != null) {
+					final String l = line;
+					Display.getDefault().asyncExec(() -> pushToChat(l));
+					if (l.contains("\"done\"")) { refreshWorkspace(); }
+				}
+			} catch (final IOException ignored) {}
+			Display.getDefault().asyncExec(() ->
+					pushToChat("{\"type\":\"error\",\"text\":\"Agent process da thoat. Xem log: " + esc(ERR_LOG) + "\"}"));
+		}, "claude-agent-stdout").start();
+
+		// stderr -> file log de debug
+		final BufferedReader err = new BufferedReader(
+				new InputStreamReader(agentProc.getErrorStream(), StandardCharsets.UTF_8));
+		new Thread(() -> {
+			try (var w = Files.newBufferedWriter(Paths.get(ERR_LOG), StandardCharsets.UTF_8)) {
+				String line;
+				while ((line = err.readLine()) != null) { w.write(line); w.newLine(); w.flush(); }
+			} catch (final IOException ignored) {}
+		}, "claude-agent-stderr").start();
+	}
+
+	private void sendChat(final String text) {
+		try {
+			ensureAgent();
+			final String af = lastActiveFile;
+			final String msg = "{\"type\":\"chat\",\"text\":\"" + esc(text) + "\",\"active_file\":"
+					+ (af == null ? "null" : "\"" + esc(af) + "\"")
+					+ ",\"diagnostics\":" + lastDiagArray + "}";
+			agentIn.write(msg);
+			agentIn.newLine();
+			agentIn.flush();
+		} catch (final IOException e) {
+			pushToChat("{\"type\":\"error\",\"text\":\"" + esc(String.valueOf(e.getMessage())) + "\"}");
+		}
+	}
+
+	/** Day 1 dong JSON tu agent sang JS: claudeRecv(<string literal>). */
+	private void pushToChat(final String jsonLine) {
+		if (browser == null || browser.isDisposed()) { return; }
+		browser.execute("window.claudeRecv && window.claudeRecv(\"" + escJs(jsonLine) + "\");");
+	}
+
+	/** Sau luot agent: refresh de Eclipse thay file doi tren dia -> Xtext validate lai. */
+	private void refreshWorkspace() {
+		final WorkspaceJob job = new WorkspaceJob("Refresh sau khi Claude sua file") {
+			@Override
+			public IStatus runInWorkspace(final IProgressMonitor monitor) {
+				try {
+					ResourcesPlugin.getWorkspace().getRoot().refreshLocal(IResource.DEPTH_INFINITE, monitor);
+				} catch (final CoreException ignored) {}
+				return Status.OK_STATUS;
+			}
+		};
+		job.setSystem(true);
+		job.schedule();
+	}
+
+	// ------------------------------------------------------- diagnostics
+
 	private String activeEditorFile() {
 		try {
 			final IEditorPart ed = getSite().getPage().getActiveEditor();
@@ -101,7 +220,6 @@ public class ChatView extends ViewPart {
 		return null;
 	}
 
-	/** Model cua thu vien built-in GAMA (link tu vung cache .eclipse) -> bo qua. */
 	private static boolean isLibraryNoise(final String path) {
 		final String p = path.replace('\\', '/');
 		return p.contains("/.eclipse/") || p.contains("/configuration/org.eclipse.osgi/");
@@ -125,8 +243,8 @@ public class ChatView extends ViewPart {
 			return;
 		}
 
-		// file dang mo len dau, roi error truoc warning, roi theo file/dong
 		final String active = activeEditorFile();
+		lastActiveFile = active;
 		diags.sort((a, b) -> {
 			final boolean aa = a.file().equals(active), bb = b.file().equals(active);
 			if (aa != bb) { return aa ? -1 : 1; }
@@ -136,29 +254,23 @@ public class ChatView extends ViewPart {
 		});
 
 		int errs = 0, warns = 0;
-		final StringBuilder json = new StringBuilder();
-		json.append("{\n  \"active_file\": ").append(active == null ? "null" : "\"" + esc(active) + "\"")
-			.append(",\n  \"diagnostics\": [\n");
+		final StringBuilder arr = new StringBuilder("[");
 		for (int i = 0; i < diags.size(); i++) {
 			final Diag d = diags.get(i);
 			if (d.sev() == IMarker.SEVERITY_ERROR) { errs++; } else if (d.sev() == IMarker.SEVERITY_WARNING) { warns++; }
-			json.append("    {\"file\":\"").append(esc(d.file()))
+			arr.append("{\"file\":\"").append(esc(d.file()))
 				.append("\",\"line\":").append(d.line())
 				.append(",\"severity\":\"").append(sevText(d.sev()))
-				.append("\",\"message\":\"").append(esc(d.msg())).append("\"}")
-				.append(i < diags.size() - 1 ? ",\n" : "\n");
+				.append("\",\"message\":\"").append(esc(d.msg())).append("\"}");
+			if (i < diags.size() - 1) { arr.append(","); }
 		}
-		json.append("  ]\n}");
+		arr.append("]");
+		lastDiagArray = arr.toString();
 
-		final String out = json.toString();
-		String note;
-		try {
-			Files.writeString(Paths.get(OUT_FILE), out);
-			note = "ghi: " + OUT_FILE;
-		} catch (final IOException io) {
-			note = "KHONG ghi duoc temp: " + io;
-		}
-		log.setText(errs + " error, " + warns + " warning (da loc thu vien built-in) | " + note + "\n\n" + out);
+		final String full = "{\"active_file\": " + (active == null ? "null" : "\"" + esc(active) + "\"")
+				+ ", \"diagnostics\": " + lastDiagArray + "}";
+		try { Files.writeString(Paths.get(OUT_FILE), full); } catch (final IOException ignored) {}
+		log.setText(errs + " error, " + warns + " warning | active: " + active + "\n\n" + full);
 	}
 
 	private static String sevText(final int sev) {
@@ -173,26 +285,63 @@ public class ChatView extends ViewPart {
 		return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "\\n");
 	}
 
-	private static String placeholderHtml() {
-		return "<!doctype html><html><body style='margin:0;font-family:Segoe UI,sans-serif;"
-				+ "background:#1e1e28;color:#d8d8e0;display:flex;flex-direction:column;height:100vh'>"
-				+ "<div style='padding:10px 14px;background:#26263a;font-weight:600'>Claude Chat "
-				+ "<span style='color:#8a8aa0;font-weight:400'>(M1 - diagnostics live, chat vao o M2)</span></div>"
-				+ "<div style='flex:1;padding:14px;color:#9a9ab0'>Panel duoi dang theo doi gach do theo thoi gian thuc."
-				+ "<br>Sua mot file .gaml va save de thay JSON tu cap nhat.</div>"
-				+ "</body></html>";
+	/** Escape de nhet vao string literal JS trong browser.execute. */
+	private static String escJs(final String s) {
+		return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "\\n");
 	}
+
+	// --------------------------------------------------------------- html
+
+	private static String chatHtml() {
+		return """
+<!doctype html><html><head><meta charset='utf-8'><style>
+ body{margin:0;font-family:'Segoe UI',sans-serif;background:#1e1e28;color:#d8d8e0;display:flex;flex-direction:column;height:100vh}
+ #hd{padding:8px 12px;background:#26263a;font-weight:600;font-size:13px}
+ #hd small{color:#8a8aa0;font-weight:400}
+ #msgs{flex:1;overflow-y:auto;padding:10px;font-size:13px}
+ .u{background:#2d3f5e;border-radius:10px 10px 2px 10px;padding:8px 10px;margin:6px 0 6px 40px;white-space:pre-wrap}
+ .a{background:#2a2a3c;border-radius:10px 10px 10px 2px;padding:8px 10px;margin:6px 40px 6px 0;white-space:pre-wrap}
+ .t{color:#7a7a95;font-size:11px;margin:2px 0 2px 8px}
+ .e{color:#ff8080;font-size:12px;margin:4px 8px}
+ #bar{display:flex;gap:6px;padding:8px;background:#26263a}
+ #in{flex:1;background:#1a1a26;color:#e0e0ea;border:1px solid #3a3a52;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;resize:none}
+ #btn{background:#5a5adf;color:#fff;border:0;border-radius:8px;padding:0 16px;cursor:pointer;font-size:13px}
+ #btn:disabled{background:#3a3a52}
+</style></head><body>
+<div id='hd'>Claude Chat <small>(M2 - agent live)</small></div>
+<div id='msgs'></div>
+<div id='bar'><textarea id='in' rows='2' placeholder='Hoi ve model GAML dang mo... (Enter gui, Shift+Enter xuong dong)'></textarea><button id='btn'>Gui</button></div>
+<script>
+ var msgs=document.getElementById('msgs'),inp=document.getElementById('in'),btn=document.getElementById('btn'),cur=null;
+ function add(cls,txt){var d=document.createElement('div');d.className=cls;d.textContent=txt;msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;return d;}
+ function send(){var t=inp.value.trim();if(!t)return;add('u',t);inp.value='';cur=null;btn.disabled=true;
+   if(window.claudeSend){claudeSend(t);}else{add('e','claudeSend chua san sang (BrowserFunction loi?)');btn.disabled=false;}}
+ btn.onclick=send;
+ inp.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+ window.claudeRecv=function(raw){
+   var m;try{m=JSON.parse(raw);}catch(e){add('e','parse: '+raw);return;}
+   if(m.type==='text'){if(!cur){cur=add('a','');}cur.textContent+=(cur.textContent?'\\n':'')+m.text;msgs.scrollTop=msgs.scrollHeight;}
+   else if(m.type==='tool'){add('t','[tool] '+m.name);}
+   else if(m.type==='error'){add('e',m.text);btn.disabled=false;}
+   else if(m.type==='done'){cur=null;btn.disabled=false;}
+ };
+</script></body></html>
+""";
+	}
+
+	// ------------------------------------------------------------ dispose
 
 	@Override
 	public void dispose() {
 		if (markerListener != null) {
 			ResourcesPlugin.getWorkspace().removeResourceChangeListener(markerListener);
 		}
+		if (agentProc != null) { agentProc.destroy(); }
 		super.dispose();
 	}
 
 	@Override
 	public void setFocus() {
-		if (log != null) { log.setFocus(); }
+		if (browser != null && !browser.isDisposed()) { browser.setFocus(); }
 	}
 }
