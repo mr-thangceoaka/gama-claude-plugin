@@ -98,6 +98,25 @@ public class ChatView extends ViewPart {
 					return null;
 				}
 			};
+			// JS goi: claudeStop() -> ngat luot agent dang chay
+			new BrowserFunction(browser, "claudeStop") {
+				@Override
+				public Object function(final Object[] args) {
+					sendRaw("{\"type\":\"interrupt\"}", false);
+					return null;
+				}
+			};
+			// JS goi: claudePerm(id, true/false) -> tra loi the duyet Edit
+			new BrowserFunction(browser, "claudePerm") {
+				@Override
+				public Object function(final Object[] args) {
+					if (args != null && args.length >= 2 && args[0] instanceof Number n) {
+						final boolean ok = Boolean.TRUE.equals(args[1]);
+						sendRaw("{\"type\":\"permission_reply\",\"id\":" + n.longValue() + ",\"allow\":" + ok + "}", false);
+					}
+					return null;
+				}
+			};
 		}
 
 		final Composite bottom = new Composite(sash, SWT.NONE);
@@ -149,6 +168,8 @@ public class ChatView extends ViewPart {
 		env.put("ANTHROPIC_AUTH_TOKEN", "");
 		env.put("ANTHROPIC_API_KEY", p.getProperty("key", "").trim());
 		env.put("CLAUDE_CODE_OAUTH_TOKEN", p.getProperty("oauth_token", "").trim());
+		// auto_approve=true -> agent tu Edit khong hoi; mac dinh false: hien the diff cho user duyet
+		env.put("GAMA_CLAUDE_AUTO_APPROVE", p.getProperty("auto_approve", "false").trim());
 		env.put("ANTHROPIC_DEFAULT_SONNET_MODEL", "");
 		env.put("ANTHROPIC_DEFAULT_OPUS_MODEL", "");
 		env.put("ANTHROPIC_DEFAULT_HAIKU_MODEL", "");
@@ -184,19 +205,36 @@ public class ChatView extends ViewPart {
 	}
 
 	private void sendChat(final String text) {
+		final String af = lastActiveFile;
+		final String msg = "{\"type\":\"chat\",\"text\":\"" + esc(text) + "\",\"active_file\":"
+				+ (af == null ? "null" : "\"" + esc(af) + "\"")
+				+ ",\"workspace_summary\":\"" + esc(lastSummary) + "\""
+				+ ",\"diagnostics\":" + lastDiagArray + "}";
+		sendRaw(msg, true);
+	}
+
+	/** Ghi 1 dong JSON sang agent. spawnIfNeeded=false: agent chua chay thi bo qua. */
+	private void sendRaw(final String json, final boolean spawnIfNeeded) {
 		try {
-			ensureAgent();
-			final String af = lastActiveFile;
-			final String msg = "{\"type\":\"chat\",\"text\":\"" + esc(text) + "\",\"active_file\":"
-					+ (af == null ? "null" : "\"" + esc(af) + "\"")
-					+ ",\"workspace_summary\":\"" + esc(lastSummary) + "\""
-					+ ",\"diagnostics\":" + lastDiagArray + "}";
-			agentIn.write(msg);
+			if (agentProc == null || !agentProc.isAlive()) {
+				if (!spawnIfNeeded) { return; }
+				ensureAgent();
+			}
+			agentIn.write(json);
 			agentIn.newLine();
 			agentIn.flush();
 		} catch (final IOException e) {
 			pushToChat("{\"type\":\"error\",\"text\":\"" + esc(String.valueOf(e.getMessage())) + "\"}");
 		}
+	}
+
+	/** M3: goi tu quick-fix tren dong gach do - nhet cau hoi vao chat va gui luon. */
+	public void askFromMarker(final String file, final int line, final String message) {
+		final String prompt = "Sua loi nay giup toi:\n" + file + ":" + line + "\n" + message;
+		if (browser != null && !browser.isDisposed()) {
+			browser.execute("window.extSend && window.extSend(\"" + escJs(prompt) + "\");");
+		}
+		sendChat(prompt);
 	}
 
 	/** Day 1 dong JSON tu agent sang JS: claudeRecv(<string literal>). */
@@ -336,27 +374,56 @@ public class ChatView extends ViewPart {
  .a{background:#2a2a3c;border-radius:10px 10px 10px 2px;padding:8px 10px;margin:6px 40px 6px 0;white-space:pre-wrap}
  .t{color:#7a7a95;font-size:11px;margin:2px 0 2px 8px}
  .e{color:#ff8080;font-size:12px;margin:4px 8px}
+ .p{background:#332b18;border:1px solid #8a6d1f;border-radius:8px;margin:6px 8px;padding:8px;font-size:12px}
+ .p pre{background:#1a1a26;border-radius:6px;padding:6px;overflow-x:auto;max-height:220px;margin:6px 0;font-size:11.5px;line-height:1.35}
+ .p .del{color:#ff9090}.p .ins{color:#7fdc9a}
+ .p button{border:0;border-radius:6px;padding:5px 14px;margin-right:8px;cursor:pointer;font-size:12px}
+ .ok{background:#2f7d4f;color:#fff}.no{background:#7d2f2f;color:#fff}
  #bar{display:flex;gap:6px;padding:8px;background:#26263a}
  #in{flex:1;background:#1a1a26;color:#e0e0ea;border:1px solid #3a3a52;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;resize:none}
  #btn{background:#5a5adf;color:#fff;border:0;border-radius:8px;padding:0 16px;cursor:pointer;font-size:13px}
  #btn:disabled{background:#3a3a52}
+ #stop{background:#8a3a3a;color:#fff;border:0;border-radius:8px;padding:0 12px;cursor:pointer;font-size:13px;display:none}
 </style></head><body>
-<div id='hd'>Claude Chat <small>(M2 - agent live)</small></div>
+<div id='hd'>Claude Chat <small>(M3 - quick-fix, diff duyet tay, stop)</small></div>
 <div id='msgs'></div>
-<div id='bar'><textarea id='in' rows='2' placeholder='Hoi ve model GAML dang mo... (Enter gui, Shift+Enter xuong dong)'></textarea><button id='btn'>Gui</button></div>
+<div id='bar'><textarea id='in' rows='2' placeholder='Hoi ve model GAML dang mo... (Enter gui, Shift+Enter xuong dong)'></textarea><button id='btn'>Gui</button><button id='stop'>Stop</button></div>
 <script>
- var msgs=document.getElementById('msgs'),inp=document.getElementById('in'),btn=document.getElementById('btn'),cur=null;
+ var msgs=document.getElementById('msgs'),inp=document.getElementById('in'),
+     btn=document.getElementById('btn'),stop=document.getElementById('stop'),cur=null;
  function add(cls,txt){var d=document.createElement('div');d.className=cls;d.textContent=txt;msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;return d;}
- function send(){var t=inp.value.trim();if(!t)return;add('u',t);inp.value='';cur=null;btn.disabled=true;
-   if(window.claudeSend){claudeSend(t);}else{add('e','claudeSend chua san sang (BrowserFunction loi?)');btn.disabled=false;}}
+ function busy(b){btn.disabled=b;stop.style.display=b?'block':'none';}
+ function send(){var t=inp.value.trim();if(!t)return;add('u',t);inp.value='';cur=null;busy(true);
+   if(window.claudeSend){claudeSend(t);}else{add('e','claudeSend chua san sang');busy(false);}}
  btn.onclick=send;
+ stop.onclick=function(){if(window.claudeStop){claudeStop();add('t','[stop] da gui yeu cau ngat');}};
  inp.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+ // quick-fix tu editor nhet cau hoi vao chat (Java goi truoc khi sendChat)
+ window.extSend=function(t){add('u',t);cur=null;busy(true);};
+ function showPerm(m){
+   var d=document.createElement('div');d.className='p';
+   var h=document.createElement('div');h.textContent='Claude muon sua: '+m.file;d.appendChild(h);
+   var pre=document.createElement('pre');
+   (m.diff||'').split('\\n').forEach(function(l){
+     var s=document.createElement('div');s.textContent=l;
+     if(l.charAt(0)==='-')s.className='del';else if(l.charAt(0)==='+')s.className='ins';
+     pre.appendChild(s);});
+   d.appendChild(pre);
+   var ok=document.createElement('button');ok.className='ok';ok.textContent='Ap dung';
+   var no=document.createElement('button');no.className='no';no.textContent='Tu choi';
+   function fin(ans){ok.disabled=no.disabled=true;d.style.opacity=0.55;
+     h.textContent=(ans?'DA AP DUNG: ':'DA TU CHOI: ')+m.file;
+     if(window.claudePerm)claudePerm(m.id,ans);}
+   ok.onclick=function(){fin(true)};no.onclick=function(){fin(false)};
+   d.appendChild(ok);d.appendChild(no);
+   msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;}
  window.claudeRecv=function(raw){
    var m;try{m=JSON.parse(raw);}catch(e){add('e','parse: '+raw);return;}
    if(m.type==='text'){if(!cur){cur=add('a','');}cur.textContent+=(cur.textContent?'\\n':'')+m.text;msgs.scrollTop=msgs.scrollHeight;}
    else if(m.type==='tool'){add('t','[tool] '+m.name);}
-   else if(m.type==='error'){add('e',m.text);btn.disabled=false;}
-   else if(m.type==='done'){cur=null;btn.disabled=false;}
+   else if(m.type==='permission'){showPerm(m);}
+   else if(m.type==='error'){add('e',m.text);busy(false);}
+   else if(m.type==='done'){cur=null;busy(false);}
  };
 </script></body></html>
 """;

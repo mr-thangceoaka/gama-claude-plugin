@@ -1,15 +1,19 @@
 """
 IDE agent cho plugin gama.ui.claude - noi chuyen voi Java qua stdio, JSON lines.
 
-vao  (stdin) : {"type":"chat","text":"...","active_file":"...","diagnostics":[...]}
-ra   (stdout): {"type":"text","text":"..."} | {"type":"tool","name":"..."}
-               | {"type":"done"} | {"type":"error","text":"..."}
+vao  (stdin) : {"type":"chat","text","active_file","workspace_summary","diagnostics":[...]}
+               {"type":"interrupt"}
+               {"type":"permission_reply","id":N,"allow":true/false}
+ra   (stdout): {"type":"text"|"tool"|"done"|"error"|...}
+               {"type":"permission","id":N,"file","tool","diff"}  <- cho user duyet Edit
 
-Guardrail nhu agent CLI: Edit/Write chi trong thu muc cua active_file,
-Bash chan het (IDE khong can bash). Multi-turn: 1 client song suot phien chat.
+M3: dispatcher chay song song voi luot agent -> Stop va duyet diff hoat dong
+ngay giua chung luot. Edit/Write mac dinh phai duoc user "Ap dung" trong chat
+(GAMA_CLAUDE_AUTO_APPROVE=true de bo qua buoc duyet).
 """
 
 import asyncio
+import itertools
 import json
 import os
 import sys
@@ -17,11 +21,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
-# ── Cô lập auth/config cho CLI mà SDK spawn ──────────────────────────────
-# ~/.claude/settings.json cua user tro BASE_URL sang proxy an external proxy (da het
-# han) va CLI bundled cua SDK uu tien settings do hon env. Giai phap: cho CLI
-# mot CLAUDE_CONFIG_DIR rieng (sach), ep BASE_URL ve Anthropic, va nho cac
-# bien rong/de-lai-tu-proxy de OAuth token (CLAUDE_CODE_OAUTH_TOKEN) co tac dung.
+# ── Cô lập auth/config cho CLI mà SDK spawn (settings.json user trỏ proxy chết) ──
 _cfg = os.path.join(os.path.expanduser("~"), ".gama-claude-config")
 os.makedirs(_cfg, exist_ok=True)
 os.environ["CLAUDE_CONFIG_DIR"] = _cfg
@@ -44,12 +44,25 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 
-# thu muc duoc phep sua - cap nhat theo active_file cua tung message
+AUTO_APPROVE = os.environ.get("GAMA_CLAUDE_AUTO_APPROVE", "false").lower() == "true"
 ALLOWED_ROOT = {"path": ""}
+PENDING = {}          # id -> Future[bool] cho cac the duyet dang cho
+_ids = itertools.count(1)
 
 
 def emit(obj):
     print(json.dumps(obj, ensure_ascii=False), flush=True)
+
+
+def _diff_preview(tool, input_data):
+    if tool == "Write":
+        return f"(tao moi / ghi de toan bo file, {len(input_data.get('content', ''))} ky tu)"
+    def cut(s):
+        lines = (s or "").splitlines() or [""]
+        return lines[:25] + (["..."] if len(lines) > 25 else [])
+    out = ["- " + l for l in cut(input_data.get("old_string", ""))]
+    out += ["+ " + l for l in cut(input_data.get("new_string", ""))]
+    return "\n".join(out)[:4000]
 
 
 async def can_use_tool(tool_name, input_data, context):
@@ -58,20 +71,36 @@ async def can_use_tool(tool_name, input_data, context):
     if tool_name in ("Write", "Edit"):
         fp = os.path.abspath(input_data.get("file_path", ""))
         root = ALLOWED_ROOT["path"]
-        if root and os.path.commonpath([fp, root]) == root:
+        if not root or os.path.commonpath([fp, root]) != root:
+            return PermissionResultDeny(message=f"Chi duoc sua file trong: {root}")
+        if AUTO_APPROVE:
             return PermissionResultAllow()
-        return PermissionResultDeny(message=f"Chi duoc sua file trong: {root}")
+        # hien the diff trong chat, cho user bam Ap dung / Tu choi
+        pid = next(_ids)
+        fut = asyncio.get_event_loop().create_future()
+        PENDING[pid] = fut
+        emit({"type": "permission", "id": pid, "file": fp, "tool": tool_name,
+              "diff": _diff_preview(tool_name, input_data)})
+        try:
+            ok = await asyncio.wait_for(fut, timeout=600)
+        except asyncio.TimeoutError:
+            ok = False
+        finally:
+            PENDING.pop(pid, None)
+        return PermissionResultAllow() if ok else PermissionResultDeny(
+            message="User tu choi thay doi nay trong chat.")
     return PermissionResultDeny(message=f"Tool '{tool_name}' bi chan trong IDE mode.")
 
 
 SYSTEM_HINT = (
     "You are a GAML/GAMA assistant embedded inside the GAMA IDE via a chat panel. "
     "Each user message may include the active .gaml file path and live compiler "
-    "diagnostics (from the IDE's Xtext validation - these are authoritative, with "
-    "exact line numbers). Use Read to inspect code, Edit to fix. After your edits "
-    "the IDE re-validates automatically and the NEXT message will carry fresh "
-    "diagnostics - so don't guess whether a fix compiled, just wait for them. "
-    "Reply in the user's language, keep answers short, cite line numbers."
+    "diagnostics (from the IDE's Xtext validation - authoritative, exact lines). "
+    "Use Read to inspect code, Edit to fix. Your edits may show an approval card "
+    "to the user; if an edit is rejected, respect it and propose an alternative "
+    "instead of retrying the same change. After edits the IDE re-validates and "
+    "the NEXT message carries fresh diagnostics - don't guess whether a fix "
+    "compiled. Reply in the user's language, keep answers short, cite line numbers."
 )
 
 
@@ -91,6 +120,35 @@ def build_prompt(msg):
     return "\n".join(parts)
 
 
+async def stdin_reader(queue):
+    loop = asyncio.get_event_loop()
+    while True:
+        line = await loop.run_in_executor(None, sys.stdin.readline)
+        if not line:
+            await queue.put(None)
+            return
+        line = line.strip()
+        if line:
+            await queue.put(line)
+
+
+async def run_turn(client, msg):
+    try:
+        await client.query(build_prompt(msg))
+        async for m in client.receive_response():
+            if isinstance(m, AssistantMessage):
+                for block in m.content:
+                    if isinstance(block, TextBlock):
+                        emit({"type": "text", "text": block.text})
+                    elif isinstance(block, ToolUseBlock):
+                        emit({"type": "tool", "name": block.name})
+            elif isinstance(m, ResultMessage):
+                emit({"type": "done"})
+    except Exception as e:
+        emit({"type": "error", "text": f"Loi agent: {e}"})
+        emit({"type": "done"})
+
+
 async def main():
     options = ClaudeAgentOptions(
         allowed_tools=["Read", "Grep", "Glob", "Edit", "Write"],
@@ -99,45 +157,51 @@ async def main():
         system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_HINT},
         max_turns=25,
     )
-    loop = asyncio.get_event_loop()
+    queue = asyncio.Queue()
+    asyncio.get_event_loop().create_task(stdin_reader(queue))
+    turn = None
     try:
         async with ClaudeSDKClient(options=options) as client:
-            emit({"type": "text", "text": "Agent san sang. Hoi gi ve model GAML di."})
+            emit({"type": "text", "text": "Agent san sang (M3). Hoi gi ve model GAML di."})
             emit({"type": "done"})
             while True:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-                if not line:
+                item = await queue.get()
+                if item is None:
+                    # stdin dong: cho luot dang chay xong roi moi thoat
+                    if turn and not turn.done():
+                        await turn
                     break
-                line = line.strip()
-                if not line:
-                    continue
                 try:
-                    msg = json.loads(line)
+                    msg = json.loads(item)
                 except json.JSONDecodeError as e:
                     emit({"type": "error", "text": f"JSON loi tu plugin: {e}"})
                     emit({"type": "done"})
                     continue
-
-                af = msg.get("active_file") or ""
-                if af:
-                    ALLOWED_ROOT["path"] = os.path.dirname(os.path.abspath(af))
-
-                try:
-                    await client.query(build_prompt(msg))
-                    async for m in client.receive_response():
-                        if isinstance(m, AssistantMessage):
-                            for block in m.content:
-                                if isinstance(block, TextBlock):
-                                    emit({"type": "text", "text": block.text})
-                                elif isinstance(block, ToolUseBlock):
-                                    emit({"type": "tool", "name": block.name})
-                        elif isinstance(m, ResultMessage):
-                            emit({"type": "done"})
-                except Exception as e:
-                    emit({"type": "error", "text": f"Loi agent: {e}"})
-                    emit({"type": "done"})
+                t = msg.get("type")
+                if t == "chat":
+                    if turn and not turn.done():
+                        emit({"type": "error", "text": "Agent dang xu ly luot truoc - bam Stop neu muon ngat."})
+                        continue
+                    af = msg.get("active_file") or ""
+                    if af:
+                        ALLOWED_ROOT["path"] = os.path.dirname(os.path.abspath(af))
+                    turn = asyncio.create_task(run_turn(client, msg))
+                elif t == "interrupt":
+                    if turn and not turn.done():
+                        try:
+                            await client.interrupt()
+                        except Exception as e:
+                            emit({"type": "error", "text": f"Khong ngat duoc: {e}"})
+                    # tu choi het cac the duyet dang treo
+                    for fut in list(PENDING.values()):
+                        if not fut.done():
+                            fut.set_result(False)
+                elif t == "permission_reply":
+                    fut = PENDING.get(msg.get("id"))
+                    if fut and not fut.done():
+                        fut.set_result(bool(msg.get("allow")))
     except Exception as e:
-        emit({"type": "error", "text": f"Khong khoi dong duoc agent (thieu API key?): {e}"})
+        emit({"type": "error", "text": f"Khong khoi dong duoc agent (auth?): {e}"})
         emit({"type": "done"})
 
 

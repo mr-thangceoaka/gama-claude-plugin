@@ -14,4 +14,10 @@
    <extension point="org.eclipse.ui.startup">
       <startup class="gama.ui.claude.OpenViewAtStartup"/>
    </extension>
+   <!-- M3: "Ask Claude" trong menu quick-fix (Ctrl+1 / click bong den) tren dong gach do -->
+   <extension point="org.eclipse.ui.ide.markerResolution">
+      <markerResolutionGenerator
+            class="gama.ui.claude.QuickFixGenerator"
+            markerType="org.eclipse.core.resources.problemmarker"/>
+   </extension>
 </plugin>

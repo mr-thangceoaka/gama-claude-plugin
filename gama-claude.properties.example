@@ -17,3 +17,7 @@ key=
 
 # Optional, default https://api.anthropic.com
 # base_url=
+
+# Optional. false (default) = every Edit shows an approval card with a diff in
+# the chat before touching your file. true = the agent edits without asking.
+# auto_approve=false
