@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <!-- Claude Chat view, dock duoc nhu moi view khac cua GAMA -->
+   <extension point="org.eclipse.ui.views">
+      <category id="gama.ui.claude.category" name="Claude"/>
+      <view id="gama.ui.claude.views.ChatView"
+            category="gama.ui.claude.category"
+            class="gama.ui.claude.views.ChatView"
+            name="Claude Chat"
+            restorable="true"/>
+   </extension>
+   <!-- tu mo view sau khi GAMA khoi dong xong, khoi phai di tim trong menu -->
+   <extension point="org.eclipse.ui.startup">
+      <startup class="gama.ui.claude.OpenViewAtStartup"/>
+   </extension>
+</plugin>
