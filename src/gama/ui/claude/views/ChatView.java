@@ -221,6 +221,8 @@ public class ChatView extends ViewPart {
 		env.put("CLAUDE_CODE_OAUTH_TOKEN", p.getProperty("oauth_token", "").trim());
 		// auto_approve=true -> agent tu Edit khong hoi; mac dinh false: hien the diff cho user duyet
 		env.put("GAMA_CLAUDE_AUTO_APPROVE", p.getProperty("auto_approve", "false").trim());
+		// model= trong properties; de trong -> ide_agent mac dinh claude-opus-4-8
+		env.put("GAMA_CLAUDE_MODEL", p.getProperty("model", "").trim());
 		env.put("ANTHROPIC_DEFAULT_SONNET_MODEL", "");
 		env.put("ANTHROPIC_DEFAULT_OPUS_MODEL", "");
 		env.put("ANTHROPIC_DEFAULT_HAIKU_MODEL", "");

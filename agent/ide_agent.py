@@ -45,6 +45,7 @@ from claude_agent_sdk import (
 )
 
 AUTO_APPROVE = os.environ.get("GAMA_CLAUDE_AUTO_APPROVE", "false").lower() == "true"
+MODEL = os.environ.get("GAMA_CLAUDE_MODEL", "").strip() or "claude-opus-4-8"
 ALLOWED_ROOT = {"path": ""}
 PENDING = {}          # id -> Future[bool] cho cac the duyet dang cho
 _ids = itertools.count(1)
@@ -158,6 +159,7 @@ async def run_turn(client, msg):
 
 async def main():
     options = ClaudeAgentOptions(
+        model=MODEL,
         allowed_tools=["Read", "Grep", "Glob", "Edit", "Write"],
         permission_mode="default",
         can_use_tool=can_use_tool,

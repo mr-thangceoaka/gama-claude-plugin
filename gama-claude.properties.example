@@ -21,3 +21,6 @@ key=
 # Optional. false (default) = every Edit shows an approval card with a diff in
 # the chat before touching your file. true = the agent edits without asking.
 # auto_approve=false
+
+# Optional. Model for the agent. Default: claude-opus-4-8.
+# model=claude-opus-4-8
