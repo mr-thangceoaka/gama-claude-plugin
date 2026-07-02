@@ -49,6 +49,8 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 
+from gama_tools import gama_tools_server
+
 AUTO_APPROVE = os.environ.get("GAMA_CLAUDE_AUTO_APPROVE", "false").lower() == "true"
 MODEL = os.environ.get("GAMA_CLAUDE_MODEL", "").strip() or "claude-opus-4-8"
 ALLOWED_ROOT = {"path": ""}
@@ -73,6 +75,8 @@ def _diff_preview(tool, input_data):
 
 async def can_use_tool(tool_name, input_data, context):
     if tool_name in ("Read", "Glob", "Grep"):
+        return PermissionResultAllow()
+    if tool_name.startswith("mcp__gama-tools__"):
         return PermissionResultAllow()
     if tool_name in ("Write", "Edit"):
         fp = os.path.abspath(input_data.get("file_path", ""))
@@ -108,9 +112,22 @@ SYSTEM_HINT = (
     "open file. "
     "Use Read to inspect code, Edit to fix. Your edits may show an approval card "
     "to the user; if an edit is rejected, respect it and propose an alternative "
-    "instead of retrying the same change. After edits the IDE re-validates and "
-    "the NEXT message carries fresh diagnostics - don't guess whether a fix "
-    "compiled. A message may include a path to a window screenshot - Read it to "
+    "instead of retrying the same change. If a Write/Edit is DENIED by policy "
+    "(outside the allowed folder), tell the user plainly - NEVER claim you "
+    "created or changed a file when the tool call failed. After edits the IDE "
+    "re-validates and the NEXT message carries fresh diagnostics - don't guess "
+    "whether a fix compiled. "
+    "You have NO shell (Bash/PowerShell are blocked), but you DO have GAMA "
+    "headless tools: after creating or editing a model that has no fresh IDE "
+    "diagnostics, call validate_gaml_syntax(gaml_path, experiment_name) to "
+    "compile-check it, read the failure log, fix, and validate again until it "
+    "passes - the same loop as a human pressing compile. run_gama_headless "
+    "actually executes an experiment but ONLY works for `type: batch` "
+    "experiments; for GUI experiments ask the user to press the Run button. "
+    "New project folders you Write inside the workspace are auto-imported into "
+    "the GAMA navigator after your turn; still tell the user where the files "
+    "are on disk. "
+    "A message may include a path to a window screenshot - Read it to "
     "visually inspect displays and charts. Reply in the user's language, keep "
     "answers short, cite line numbers."
 )
@@ -163,7 +180,8 @@ async def run_turn(client, msg):
                     if isinstance(block, TextBlock):
                         emit({"type": "text", "text": block.text})
                     elif isinstance(block, ToolUseBlock):
-                        emit({"type": "tool", "name": block.name})
+                        # "mcp__gama-tools__validate_gaml_syntax" -> "validate_gaml_syntax"
+                        emit({"type": "tool", "name": block.name.split("__")[-1]})
             elif isinstance(m, ResultMessage):
                 emit({"type": "done"})
     except Exception as e:
@@ -174,19 +192,23 @@ async def run_turn(client, msg):
 async def main():
     options = ClaudeAgentOptions(
         model=MODEL,
-        allowed_tools=["Read", "Grep", "Glob", "Edit", "Write"],
+        mcp_servers={"gama-tools": gama_tools_server},
+        allowed_tools=["Read", "Grep", "Glob", "Edit", "Write",
+                       "mcp__gama-tools__validate_gaml_syntax",
+                       "mcp__gama-tools__run_gama_headless"],
         permission_mode="default",
         can_use_tool=can_use_tool,
         system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_HINT},
-        max_turns=25,
+        max_turns=40,
     )
     queue = asyncio.Queue()
     asyncio.get_event_loop().create_task(stdin_reader(queue))
     turn = None
     try:
         async with ClaudeSDKClient(options=options) as client:
-            emit({"type": "text", "text": "Agent ready. Ask me about your GAML model."})
-            emit({"type": "done"})
+            # info, KHONG kem "done": message dau cua user den truoc loi chao nay,
+            # mot "done" o day se tat nham nut Stop + typing indicator cua luot dang chay
+            emit({"type": "info", "text": "Agent ready - ask about your GAML model."})
             while True:
                 item = await queue.get()
                 if item is None:

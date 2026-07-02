@@ -242,6 +242,8 @@ public class ChatView extends ViewPart {
 		env.put("GAMA_CLAUDE_AUTO_APPROVE", p.getProperty("auto_approve", "false").trim());
 		// model= trong properties; de trong -> ide_agent mac dinh claude-opus-4-8
 		env.put("GAMA_CLAUDE_MODEL", p.getProperty("model", "").trim());
+		// M6: cho agent goi gama-headless (validate/run). headless_dir= de override.
+		env.put("GAMA_HEADLESS_DIR", headlessDir(p));
 		env.put("ANTHROPIC_DEFAULT_SONNET_MODEL", "");
 		env.put("ANTHROPIC_DEFAULT_OPUS_MODEL", "");
 		env.put("ANTHROPIC_DEFAULT_HAIKU_MODEL", "");
@@ -280,12 +282,29 @@ public class ChatView extends ViewPart {
 		}, "claude-agent-stderr").start();
 	}
 
+	/** M6: thu muc headless cua GAMA - tu do theo vi tri cai dat, properties de override. */
+	private static String headlessDir(final Properties p) {
+		final String cfg = p.getProperty("headless_dir", "").trim();
+		if (!cfg.isEmpty()) { return cfg; }
+		try {
+			final var url = org.eclipse.core.runtime.Platform.getInstallLocation().getURL();
+			final File h = new File(new File(url.getPath()), "headless");
+			if (h.isDirectory()) { return h.getAbsolutePath(); }
+		} catch (final Exception ignored) {}
+		return "";
+	}
+
 	private void sendChat(final String text) {
 		final String af = lastActiveFile;
 		final String snap = pendingSnapshot;
 		pendingSnapshot = null;
-		// M5: pham vi context = folder user chon, khong thi project cua file dang mo
-		final String root = customRoot != null ? customRoot : lastProjectRoot;
+		// M5/M6: pham vi context = folder user chon > project cua file dang mo
+		// > root workspace (de "tao project moi" chay duoc khi chua mo file nao)
+		String root = customRoot != null ? customRoot : lastProjectRoot;
+		if (root == null) {
+			final var loc = ResourcesPlugin.getWorkspace().getRoot().getLocation();
+			if (loc != null) { root = String.valueOf(loc); }
+		}
 		final String msg = "{\"type\":\"chat\",\"text\":\"" + esc(text) + "\",\"active_file\":"
 				+ (af == null ? "null" : "\"" + esc(af) + "\"")
 				+ ",\"workspace_summary\":\"" + esc(lastSummary) + "\""
@@ -405,11 +424,14 @@ public class ChatView extends ViewPart {
 		browser.execute("window.claudeRecv && window.claudeRecv(\"" + escJs(jsonLine) + "\");");
 	}
 
-	/** Sau luot agent: refresh de Eclipse thay file doi tren dia -> Xtext validate lai. */
+	/** Sau luot agent: refresh de Eclipse thay file doi tren dia -> Xtext validate lai.
+	 *  M6: kem auto-import - folder moi co .project trong workspace (agent vua tao)
+	 *  duoc dua vao navigator luon, khoi phai File > Import thu cong. */
 	private void refreshWorkspace() {
 		final WorkspaceJob job = new WorkspaceJob("Refresh after Claude edits") {
 			@Override
 			public IStatus runInWorkspace(final IProgressMonitor monitor) {
+				importNewProjects(monitor);
 				try {
 					ResourcesPlugin.getWorkspace().getRoot().refreshLocal(IResource.DEPTH_INFINITE, monitor);
 				} catch (final CoreException ignored) {}
@@ -418,6 +440,33 @@ public class ChatView extends ViewPart {
 		};
 		job.setSystem(true);
 		job.schedule();
+	}
+
+	private void importNewProjects(final IProgressMonitor monitor) {
+		final var wsRoot = ResourcesPlugin.getWorkspace().getRoot();
+		if (wsRoot.getLocation() == null) { return; }
+		final File[] kids = wsRoot.getLocation().toFile().listFiles();
+		if (kids == null) { return; }
+		for (final File k : kids) {
+			final File dot = new File(k, ".project");
+			if (!k.isDirectory() || !dot.isFile()) { continue; }
+			try {
+				final var desc = ResourcesPlugin.getWorkspace().loadProjectDescription(
+						org.eclipse.core.runtime.Path.fromOSString(dot.getAbsolutePath()));
+				final var proj = wsRoot.getProject(desc.getName());
+				if (!proj.exists()) {
+					proj.create(desc, monitor);
+					pushLater("{\"type\":\"info\",\"text\":\"Imported new project into the navigator: "
+							+ esc(desc.getName()) + "\"}");
+				}
+				if (!proj.isOpen()) { proj.open(monitor); }
+			} catch (final Exception ignored) {}
+		}
+	}
+
+	/** pushToChat tu WorkspaceJob (khong phai UI thread). */
+	private void pushLater(final String jsonLine) {
+		Display.getDefault().asyncExec(() -> pushToChat(jsonLine));
 	}
 
 	// ------------------------------------------------------- diagnostics
@@ -611,7 +660,7 @@ public class ChatView extends ViewPart {
       cursor:pointer;padding:2px 9px;font-size:13px;margin-left:8px}
  #clr:hover{color:#ff9c9c;border-color:#5c2e2e}
 </style></head><body>
-<div id='hd'><div id='dot'></div><b>Claude</b>&nbsp;<span style='color:var(--dim);margin-left:0'>GAMA Copilot</span><span>v0.4</span><button id='clr' title='Clear conversation and start a fresh session'>&#128465;</button></div>
+<div id='hd'><div id='dot'></div><b>Claude</b>&nbsp;<span style='color:var(--dim);margin-left:0'>GAMA Copilot</span><span>v0.5</span><button id='clr' title='Clear conversation and start a fresh session'>&#128465;</button></div>
 <div id='msgs'></div>
 <div id='bar'><textarea id='in' rows='1' placeholder='Ask about the open GAML model...  (Enter to send / Shift+Enter for a new line)'></textarea><button id='snap' title='Attach a window snapshot to your next message'>&#128247;</button><button id='btn' title='Send'>&#10148;</button><button id='stop' title='Interrupt this turn'>&#9632;</button></div>
 <script>

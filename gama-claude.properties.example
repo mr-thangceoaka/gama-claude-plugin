@@ -24,3 +24,7 @@ key=
 
 # Optional. Model for the agent. Default: claude-opus-4-8.
 # model=claude-opus-4-8
+
+# Optional. GAMA headless folder (contains gama-headless.bat/.sh) so the agent
+# can compile-check and batch-run models. Auto-detected as <GAMA>/headless.
+# headless_dir=C:/Users/you/AppData/Local/Programs/Gama/headless

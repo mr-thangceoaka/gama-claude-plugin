@@ -110,6 +110,15 @@ first install.
       the agent session so the next message starts with zero carried-over
       context. Installer now removes stale plugin versions so UI updates always
       load after a GAMA restart.
+- [x] M6 (v0.3.0): agent-driven verify loop - the agent gets the GAMA headless
+      tools (validate_gaml_syntax / run_gama_headless, auto-detected from the
+      install, subprocess in a worker thread so Stop stays responsive) and is
+      instructed to compile-check models it creates, read the log, fix and
+      retry - Cursor-style run/fix cycles. New project folders written into the
+      workspace are auto-imported into the navigator after each turn. Edit
+      scope falls back to the workspace root when no file is open, so "create a
+      new project" works from a fresh chat. Fixed the startup greeting eating
+      the Stop button / typing indicator on the first turn.
 
 ## Why not headless?
 
