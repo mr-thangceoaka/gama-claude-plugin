@@ -21,7 +21,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
-# ── Cô lập auth/config cho CLI mà SDK spawn (settings.json user trỏ proxy chết) ──
+# ── Isolate CLI config: a user-level ~/.claude/settings.json (custom proxy/BASE_URL) must not hijack the agent ──
 _cfg = os.path.join(os.path.expanduser("~"), ".gama-claude-config")
 os.makedirs(_cfg, exist_ok=True)
 os.environ["CLAUDE_CONFIG_DIR"] = _cfg
