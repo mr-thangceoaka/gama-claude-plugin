@@ -145,6 +145,7 @@ public class ChatView extends ViewPart {
 		env.put("ANTHROPIC_BASE_URL", p.getProperty("base_url", "https://api.anthropic.com").trim());
 		env.put("ANTHROPIC_AUTH_TOKEN", "");
 		env.put("ANTHROPIC_API_KEY", p.getProperty("key", "").trim());
+		env.put("CLAUDE_CODE_OAUTH_TOKEN", p.getProperty("oauth_token", "").trim());
 		env.put("ANTHROPIC_DEFAULT_SONNET_MODEL", "");
 		env.put("ANTHROPIC_DEFAULT_OPUS_MODEL", "");
 		env.put("ANTHROPIC_DEFAULT_HAIKU_MODEL", "");

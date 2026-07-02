@@ -17,6 +17,22 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
+# ── Cô lập auth/config cho CLI mà SDK spawn ──────────────────────────────
+# ~/.claude/settings.json cua user tro BASE_URL sang proxy an external proxy (da het
+# han) va CLI bundled cua SDK uu tien settings do hon env. Giai phap: cho CLI
+# mot CLAUDE_CONFIG_DIR rieng (sach), ep BASE_URL ve Anthropic, va nho cac
+# bien rong/de-lai-tu-proxy de OAuth token (CLAUDE_CODE_OAUTH_TOKEN) co tac dung.
+_cfg = os.path.join(os.path.expanduser("~"), ".gama-claude-config")
+os.makedirs(_cfg, exist_ok=True)
+os.environ["CLAUDE_CONFIG_DIR"] = _cfg
+if not os.environ.get("ANTHROPIC_BASE_URL"):
+    os.environ["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
+for _k in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+           "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+           "ANTHROPIC_DEFAULT_HAIKU_MODEL"):
+    if not os.environ.get(_k):
+        os.environ.pop(_k, None)
+
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
