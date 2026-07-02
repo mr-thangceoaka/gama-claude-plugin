@@ -90,7 +90,11 @@ first install.
       doesn't surface external marker resolutions, so the context menu is the
       reliable path), chat UI overhaul (markdown, tool chips, typing indicator,
       readable diagnostics panel)
-- [ ] M4 send display snapshots so the model can see charts/maps
+- [x] M4 window snapshots: the camera button captures the GAMA window to a PNG
+      that is attached to your next message; the agent Reads the image to
+      visually inspect displays and charts
+- [x] English-only UI; Ctrl+Alt+C shortcut + view-toolbar "Ask line" button
+      (fallbacks for the Xtext editor context menu)
 
 ## Why not headless?
 

@@ -25,16 +25,25 @@ import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.jface.action.Action;
+import org.eclipse.jface.text.ITextSelection;
+import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.browser.BrowserFunction;
 import org.eclipse.swt.custom.SashForm;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
+import org.eclipse.swt.graphics.ImageLoader;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IEditorPart;
 import org.eclipse.ui.IPartListener2;
@@ -67,6 +76,8 @@ public class ChatView extends ViewPart {
 	/** JSON array cua diagnostics lan quet gan nhat - dinh kem moi message chat. */
 	private volatile String lastDiagArray = "[]";
 	private volatile String lastActiveFile = null;
+	/** M4: duong dan snapshot cho message ke tiep (chup bang nut camera). */
+	private volatile String pendingSnapshot = null;
 
 	private record Diag(String file, String project, int line, int sev, String msg) {}
 
@@ -120,18 +131,38 @@ public class ChatView extends ViewPart {
 					return null;
 				}
 			};
+			// JS goi: claudeSnap() -> M4: chup cua so GAMA, dinh vao message ke tiep
+			new BrowserFunction(browser, "claudeSnap") {
+				@Override
+				public Object function(final Object[] args) {
+					takeSnapshot();
+					return null;
+				}
+			};
 		}
 
 		final Composite bottom = new Composite(sash, SWT.NONE);
 		bottom.setLayout(new GridLayout(1, false));
 		final Button scan = new Button(bottom, SWT.PUSH);
-		scan.setText("↻ Refresh diagnostics (tu chay: mo view / doi tab / save)");
+		scan.setText("↻ Refresh diagnostics (auto: view open / tab switch / save)");
 		scan.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 		log = new Text(bottom, SWT.MULTI | SWT.READ_ONLY | SWT.V_SCROLL | SWT.H_SCROLL | SWT.BORDER);
 		log.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-		log.setText("Dang quet lan dau...");
+		log.setText("Scanning...");
 		scan.addListener(SWT.Selection, e -> scanMarkers());
 		sash.setWeights(new int[] { 75, 25 });
+
+		// toolbar cua view: duong tat khi menu chuot phai bi editor Xtext nuot
+		final var tb = getViewSite().getActionBars().getToolBarManager();
+		tb.add(new Action("Ask line") {
+			@Override
+			public void run() { askCurrentLine(); }
+		});
+		tb.add(new Action("Snapshot") {
+			@Override
+			public void run() { takeSnapshot(); }
+		});
+		getViewSite().getActionBars().updateActionBars();
 
 		// tu quet khi: (1) marker doi (save -> Xtext validate lai)
 		markerListener = event -> {
@@ -170,13 +201,13 @@ public class ChatView extends ViewPart {
 		if (Files.exists(cfg)) {
 			try (var r = Files.newBufferedReader(cfg, StandardCharsets.UTF_8)) { p.load(r); }
 		} else {
-			throw new IOException("Thieu file config: " + cfg
-					+ "  (can python=..., script=..., key=sk-ant-...)");
+			throw new IOException("Missing config file: " + cfg
+					+ "  (needs python=..., script=..., oauth_token= or key=)");
 		}
 		final String python = p.getProperty("python", "python");
 		final String script = p.getProperty("script", "");
 		if (script.isBlank() || !Files.exists(Paths.get(script))) {
-			throw new IOException("'script' trong .gama-claude.properties khong ton tai: " + script);
+			throw new IOException("'script' in .gama-claude.properties does not exist: " + script);
 		}
 
 		final ProcessBuilder pb = new ProcessBuilder(python, script);
@@ -210,7 +241,7 @@ public class ChatView extends ViewPart {
 				}
 			} catch (final IOException ignored) {}
 			Display.getDefault().asyncExec(() ->
-					pushToChat("{\"type\":\"error\",\"text\":\"Agent process da thoat. Xem log: " + esc(ERR_LOG) + "\"}"));
+					pushToChat("{\"type\":\"error\",\"text\":\"Agent process exited. See log: " + esc(ERR_LOG) + "\"}"));
 		}, "claude-agent-stdout").start();
 
 		// stderr -> file log de debug
@@ -226,9 +257,12 @@ public class ChatView extends ViewPart {
 
 	private void sendChat(final String text) {
 		final String af = lastActiveFile;
+		final String snap = pendingSnapshot;
+		pendingSnapshot = null;
 		final String msg = "{\"type\":\"chat\",\"text\":\"" + esc(text) + "\",\"active_file\":"
 				+ (af == null ? "null" : "\"" + esc(af) + "\"")
 				+ ",\"workspace_summary\":\"" + esc(lastSummary) + "\""
+				+ (snap == null ? "" : ",\"snapshot\":\"" + esc(snap) + "\"")
 				+ ",\"diagnostics\":" + lastDiagArray + "}";
 		sendRaw(msg, true);
 	}
@@ -250,11 +284,60 @@ public class ChatView extends ViewPart {
 
 	/** M3: goi tu quick-fix tren dong gach do - nhet cau hoi vao chat va gui luon. */
 	public void askFromMarker(final String file, final int line, final String message) {
-		final String prompt = "Sua loi nay giup toi:\n" + file + ":" + line + "\n" + message;
+		final String prompt = "Fix this for me:\n" + file + ":" + line + "\n" + message;
 		if (browser != null && !browser.isDisposed()) {
 			browser.execute("window.extSend && window.extSend(\"" + escJs(prompt) + "\");");
 		}
 		sendChat(prompt);
+	}
+
+	/** M3.5: lay file + dong con tro cua editor dang mo, kem marker neu co, roi hoi Claude. */
+	public void askCurrentLine() {
+		try {
+			final IEditorPart ed = getSite().getPage().getActiveEditor();
+			if (ed == null) { return; }
+			final IFile f = ed.getEditorInput().getAdapter(IFile.class);
+			if (f == null || !String.valueOf(f.getLocation()).toLowerCase().endsWith(".gaml")) { return; }
+			int line = -1;
+			final ISelection sel = ed.getSite().getSelectionProvider() == null ? null
+					: ed.getSite().getSelectionProvider().getSelection();
+			if (sel instanceof ITextSelection ts) { line = ts.getStartLine() + 1; }
+			String msg = "";
+			try {
+				for (final IMarker m : f.findMarkers(IMarker.PROBLEM, true, IResource.DEPTH_ZERO)) {
+					if (m.getAttribute(IMarker.LINE_NUMBER, -1) == line) {
+						msg = m.getAttribute(IMarker.MESSAGE, "");
+						break;
+					}
+				}
+			} catch (final Exception ignored) {}
+			askFromMarker(String.valueOf(f.getLocation()), line, msg.isEmpty()
+					? "(no marker on this line - read the surrounding code, explain and fix if needed)"
+					: msg);
+		} catch (final Exception ignored) {}
+	}
+
+	/** M4: chup toan bo cua so GAMA ra PNG, dinh kem vao message ke tiep. */
+	private void takeSnapshot() {
+		try {
+			final Shell shell = browser != null ? browser.getShell() : Display.getDefault().getActiveShell();
+			if (shell == null) { return; }
+			final Rectangle b = shell.getBounds();
+			final Image img = new Image(shell.getDisplay(), b.width, b.height);
+			final GC gc = new GC(shell);
+			gc.copyArea(img, 0, 0);
+			gc.dispose();
+			final String path = System.getProperty("java.io.tmpdir") + File.separator
+					+ "gama_claude_snap_" + System.currentTimeMillis() + ".png";
+			final ImageLoader loader = new ImageLoader();
+			loader.data = new ImageData[] { img.getImageData() };
+			loader.save(path, SWT.IMAGE_PNG);
+			img.dispose();
+			pendingSnapshot = path;
+			pushToChat("{\"type\":\"info\",\"text\":\"Snapshot captured - it will be attached to your next message.\"}");
+		} catch (final Exception e) {
+			pushToChat("{\"type\":\"error\",\"text\":\"Snapshot failed: " + esc(String.valueOf(e.getMessage())) + "\"}");
+		}
 	}
 
 	/** Day 1 dong JSON tu agent sang JS: claudeRecv(<string literal>). */
@@ -265,7 +348,7 @@ public class ChatView extends ViewPart {
 
 	/** Sau luot agent: refresh de Eclipse thay file doi tren dia -> Xtext validate lai. */
 	private void refreshWorkspace() {
-		final WorkspaceJob job = new WorkspaceJob("Refresh sau khi Claude sua file") {
+		final WorkspaceJob job = new WorkspaceJob("Refresh after Claude edits") {
 			@Override
 			public IStatus runInWorkspace(final IProgressMonitor monitor) {
 				try {
@@ -309,7 +392,7 @@ public class ChatView extends ViewPart {
 						m.getAttribute(IMarker.MESSAGE, "")));
 			}
 		} catch (final CoreException e) {
-			log.setText("findMarkers loi: " + e);
+			log.setText("findMarkers failed: " + e);
 			return;
 		}
 
@@ -360,21 +443,21 @@ public class ChatView extends ViewPart {
 				+ ", \"diagnostics\": " + lastDiagArray + "}";
 		try { Files.writeString(Paths.get(OUT_FILE), full); } catch (final IOException ignored) {}
 
-		// hien thi cho nguoi doc: gon, khong JSON
+		// human-readable panel, khong JSON
 		final StringBuilder t = new StringBuilder();
 		t.append("Workspace: ").append(errs).append(" error / ").append(warns).append(" warning");
 		if (activeProj != null) {
-			t.append("   |   gui agent (").append(activeProj).append("): ")
+			t.append("   |   sent to agent (").append(activeProj).append("): ")
 			 .append(sErrs).append(" error / ").append(sWarns).append(" warning");
 		}
-		t.append("\nActive: ").append(active == null ? "(khong co file .gaml dang mo)" : active).append("\n");
+		t.append("\nActive: ").append(active == null ? "(no .gaml file open)" : active).append("\n");
 		String lastFile = null;
 		int shown = 0;
 		for (final Diag d : scoped) {
-			if (shown++ >= 50) { t.append("  ... (").append(scoped.size() - 50).append(" muc nua)\n"); break; }
+			if (shown++ >= 50) { t.append("  ... (").append(scoped.size() - 50).append(" more)\n"); break; }
 			if (!d.file().equals(lastFile)) {
 				lastFile = d.file();
-				t.append("\n").append(shortName(d.file())).append(d.file().equals(active) ? "  (dang mo)" : "").append("\n");
+				t.append("\n").append(shortName(d.file())).append(d.file().equals(active) ? "  (open)" : "").append("\n");
 			}
 			final String m = d.msg().length() > 110 ? d.msg().substring(0, 110) + "..." : d.msg();
 			t.append(String.format("  L%-5d %-7s %s%n", d.line(), sevText(d.sev()), m));
@@ -439,6 +522,8 @@ public class ChatView extends ViewPart {
        padding:2px 10px;font-size:11px}
  .e{color:#ff8f8f;font-size:12px;margin:4px 6px 10px;padding:7px 10px;background:#2c1a1a;
     border:1px solid #5c2e2e;border-radius:8px}
+ .i{color:var(--dim);font-size:11.5px;margin:2px 6px 10px;padding:5px 10px;background:#20202e;
+    border:1px solid var(--line);border-radius:8px}
  .p{background:#26210f;border:1px solid var(--warnb);border-radius:10px;margin:0 8px 12px 0;padding:10px}
  .p .ph{font-size:12px;font-weight:600;margin-bottom:2px}
  .p .pf{font-size:11px;color:var(--dim);word-break:break-all}
@@ -456,18 +541,20 @@ public class ChatView extends ViewPart {
  #in{flex:1;background:#13131c;color:var(--tx);border:1px solid var(--line);border-radius:10px;
      padding:9px 12px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.4}
  #in:focus{border-color:var(--acc)}
- #btn,#stop{border:0;border-radius:10px;width:44px;cursor:pointer;font-size:15px;flex:none}
+ #btn,#stop,#snap{border:0;border-radius:10px;width:44px;cursor:pointer;font-size:15px;flex:none}
  #btn{background:var(--acc);color:#fff}
  #btn:disabled{background:#33334a;color:#66667f;cursor:default}
  #stop{background:var(--bad);color:#fff;display:none}
+ #snap{background:#232336;border:1px solid var(--line);color:var(--tx)}
 </style></head><body>
-<div id='hd'><div id='dot'></div><b>Claude</b>&nbsp;<span style='color:var(--dim);margin-left:0'>GAMA Copilot</span><span>v0.2</span></div>
+<div id='hd'><div id='dot'></div><b>Claude</b>&nbsp;<span style='color:var(--dim);margin-left:0'>GAMA Copilot</span><span>v0.3</span></div>
 <div id='msgs'></div>
-<div id='bar'><textarea id='in' rows='1' placeholder='Hoi ve model GAML dang mo...  (Enter gui / Shift+Enter xuong dong)'></textarea><button id='btn' title='Gui'>➤</button><button id='stop' title='Ngat luot nay'>■</button></div>
+<div id='bar'><textarea id='in' rows='1' placeholder='Ask about the open GAML model...  (Enter to send / Shift+Enter for a new line)'></textarea><button id='snap' title='Attach a window snapshot to your next message'>&#128247;</button><button id='btn' title='Send'>&#10148;</button><button id='stop' title='Interrupt this turn'>&#9632;</button></div>
 <script>
  var msgs=document.getElementById('msgs'),inp=document.getElementById('in'),
      btn=document.getElementById('btn'),stop=document.getElementById('stop'),
-     dot=document.getElementById('dot'),cur=null,think=null,toolRow=null;
+     snap=document.getElementById('snap'),dot=document.getElementById('dot'),
+     cur=null,think=null,toolRow=null;
  function scr(){msgs.scrollTop=msgs.scrollHeight;}
  function md(t){
    t=t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -479,16 +566,18 @@ public class ChatView extends ViewPart {
    if(label){var l=document.createElement('div');l.className='lbl';l.textContent=label;r.appendChild(l);}
    var b=document.createElement('div');b.className='bd';r.appendChild(b);
    msgs.appendChild(r);scr();return{r:r,b:b};}
- function addUser(t){var x=row('u','Ban');x.b.textContent=t;}
+ function addUser(t){var x=row('u','You');x.b.textContent=t;}
  function addErr(t){var d=document.createElement('div');d.className='e';d.textContent=t;msgs.appendChild(d);scr();}
+ function addInfo(t){var d=document.createElement('div');d.className='i';d.textContent=t;msgs.appendChild(d);scr();}
  function busy(on){btn.style.display=on?'none':'block';stop.style.display=on?'block':'none';
-   dot.className=on?'on':'';if(on){think=row('a th','Claude');think.b.innerHTML="Dang suy nghi<span class='dts'></span>";}
+   dot.className=on?'on':'';if(on){think=row('a th','Claude');think.b.innerHTML="Thinking<span class='dts'></span>";}
    else if(think){think.r.remove();think=null;}toolRow=null;}
  function clearThink(){if(think){think.r.remove();think=null;}}
  function send(){var t=inp.value.trim();if(!t)return;addUser(t);inp.value='';autoh();cur=null;busy(true);
-   if(window.claudeSend){claudeSend(t);}else{addErr('Cau noi Java chua san sang');busy(false);}}
+   if(window.claudeSend){claudeSend(t);}else{addErr('Bridge to Java not ready');busy(false);}}
  btn.onclick=send;
  stop.onclick=function(){if(window.claudeStop)claudeStop();};
+ snap.onclick=function(){if(window.claudeSnap)claudeSnap();};
  function autoh(){inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,110)+'px';}
  inp.addEventListener('input',autoh);
  inp.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
@@ -496,7 +585,7 @@ public class ChatView extends ViewPart {
  function showPerm(m){
    clearThink();
    var d=document.createElement('div');d.className='p';
-   var h=document.createElement('div');h.className='ph';h.textContent='Claude de xuat sua file';d.appendChild(h);
+   var h=document.createElement('div');h.className='ph';h.textContent='Claude proposes an edit';d.appendChild(h);
    var pf=document.createElement('div');pf.className='pf';pf.textContent=m.file;d.appendChild(pf);
    var pre=document.createElement('pre');
    (m.diff||'').split('\\n').forEach(function(l){
@@ -504,10 +593,10 @@ public class ChatView extends ViewPart {
      if(l.charAt(0)==='-')s.className='del';else if(l.charAt(0)==='+')s.className='ins';
      pre.appendChild(s);});
    d.appendChild(pre);
-   var ok=document.createElement('button');ok.className='ok';ok.textContent='✓ Ap dung';
-   var no=document.createElement('button');no.className='no';no.textContent='Tu choi';
+   var ok=document.createElement('button');ok.className='ok';ok.textContent='Apply';
+   var no=document.createElement('button');no.className='no';no.textContent='Reject';
    function fin(ans){ok.disabled=no.disabled=true;d.style.opacity=.55;
-     h.textContent=ans?'✓ Da ap dung':'✗ Da tu choi';
+     h.textContent=ans?'Applied':'Rejected';
      if(window.claudePerm)claudePerm(m.id,ans);}
    ok.onclick=function(){fin(true)};no.onclick=function(){fin(false)};
    d.appendChild(ok);d.appendChild(no);
@@ -519,9 +608,10 @@ public class ChatView extends ViewPart {
      cur.raw+=(cur.raw?'\\n':'')+m.text;cur.b.innerHTML=md(cur.raw);scr();}
    else if(m.type==='tool'){clearThink();cur=null;
      if(!toolRow){toolRow=document.createElement('div');toolRow.className='tools';msgs.appendChild(toolRow);}
-     var c=document.createElement('span');c.className='chip';c.textContent='⚙ '+m.name.replace('mcp__gama-tools__','');
+     var c=document.createElement('span');c.className='chip';c.textContent='* '+m.name;
      toolRow.appendChild(c);scr();}
    else if(m.type==='permission'){showPerm(m);}
+   else if(m.type==='info'){addInfo(m.text);}
    else if(m.type==='error'){clearThink();addErr(m.text);busy(false);}
    else if(m.type==='done'){cur=null;busy(false);}
  };

@@ -56,7 +56,7 @@ def emit(obj):
 
 def _diff_preview(tool, input_data):
     if tool == "Write":
-        return f"(tao moi / ghi de toan bo file, {len(input_data.get('content', ''))} ky tu)"
+        return f"(create / overwrite whole file, {len(input_data.get('content', ''))} chars)"
     def cut(s):
         lines = (s or "").splitlines() or [""]
         return lines[:25] + (["..."] if len(lines) > 25 else [])
@@ -72,7 +72,7 @@ async def can_use_tool(tool_name, input_data, context):
         fp = os.path.abspath(input_data.get("file_path", ""))
         root = ALLOWED_ROOT["path"]
         if not root or os.path.commonpath([fp, root]) != root:
-            return PermissionResultDeny(message=f"Chi duoc sua file trong: {root}")
+            return PermissionResultDeny(message=f"Edits are only allowed inside: {root}")
         if AUTO_APPROVE:
             return PermissionResultAllow()
         # hien the diff trong chat, cho user bam Ap dung / Tu choi
@@ -88,8 +88,8 @@ async def can_use_tool(tool_name, input_data, context):
         finally:
             PENDING.pop(pid, None)
         return PermissionResultAllow() if ok else PermissionResultDeny(
-            message="User tu choi thay doi nay trong chat.")
-    return PermissionResultDeny(message=f"Tool '{tool_name}' bi chan trong IDE mode.")
+            message="User rejected this change in chat.")
+    return PermissionResultDeny(message=f"Tool '{tool_name}' is blocked in IDE mode.")
 
 
 SYSTEM_HINT = (
@@ -100,7 +100,9 @@ SYSTEM_HINT = (
     "to the user; if an edit is rejected, respect it and propose an alternative "
     "instead of retrying the same change. After edits the IDE re-validates and "
     "the NEXT message carries fresh diagnostics - don't guess whether a fix "
-    "compiled. Reply in the user's language, keep answers short, cite line numbers."
+    "compiled. A message may include a path to a window screenshot - Read it to "
+    "visually inspect displays and charts. Reply in the user's language, keep "
+    "answers short, cite line numbers."
 )
 
 
@@ -112,6 +114,11 @@ def build_prompt(msg):
     ws = msg.get("workspace_summary")
     if ws:
         parts.append(f"[context] workspace: {ws}")
+    snap = msg.get("snapshot")
+    if snap:
+        parts.append(f"[context] fresh screenshot of the whole GAMA window: {snap}"
+                     " - use the Read tool on this image file to SEE the running"
+                     " simulation (displays, charts, map)")
     diags = msg.get("diagnostics") or []
     if diags:
         parts.append("[context] diagnostics of the ACTIVE PROJECT only (live from IDE):")
@@ -145,7 +152,7 @@ async def run_turn(client, msg):
             elif isinstance(m, ResultMessage):
                 emit({"type": "done"})
     except Exception as e:
-        emit({"type": "error", "text": f"Loi agent: {e}"})
+        emit({"type": "error", "text": f"Agent error: {e}"})
         emit({"type": "done"})
 
 
@@ -162,7 +169,7 @@ async def main():
     turn = None
     try:
         async with ClaudeSDKClient(options=options) as client:
-            emit({"type": "text", "text": "Agent san sang (M3). Hoi gi ve model GAML di."})
+            emit({"type": "text", "text": "Agent ready. Ask me about your GAML model."})
             emit({"type": "done"})
             while True:
                 item = await queue.get()
@@ -174,13 +181,13 @@ async def main():
                 try:
                     msg = json.loads(item)
                 except json.JSONDecodeError as e:
-                    emit({"type": "error", "text": f"JSON loi tu plugin: {e}"})
+                    emit({"type": "error", "text": f"Bad JSON from plugin: {e}"})
                     emit({"type": "done"})
                     continue
                 t = msg.get("type")
                 if t == "chat":
                     if turn and not turn.done():
-                        emit({"type": "error", "text": "Agent dang xu ly luot truoc - bam Stop neu muon ngat."})
+                        emit({"type": "error", "text": "Previous turn still running - press Stop to interrupt."})
                         continue
                     af = msg.get("active_file") or ""
                     if af:
@@ -191,7 +198,7 @@ async def main():
                         try:
                             await client.interrupt()
                         except Exception as e:
-                            emit({"type": "error", "text": f"Khong ngat duoc: {e}"})
+                            emit({"type": "error", "text": f"Could not interrupt: {e}"})
                     # tu choi het cac the duyet dang treo
                     for fut in list(PENDING.values()):
                         if not fut.done():
@@ -201,7 +208,7 @@ async def main():
                     if fut and not fut.done():
                         fut.set_result(bool(msg.get("allow")))
     except Exception as e:
-        emit({"type": "error", "text": f"Khong khoi dong duoc agent (auth?): {e}"})
+        emit({"type": "error", "text": f"Agent failed to start (auth?): {e}"})
         emit({"type": "done"})
 
 

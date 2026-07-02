@@ -30,7 +30,7 @@ public class QuickFixGenerator implements IMarkerResolutionGenerator2 {
 
 			@Override
 			public String getLabel() {
-				return "Ask Claude: sua loi nay";
+				return "Ask Claude: fix this error";
 			}
 
 			@Override

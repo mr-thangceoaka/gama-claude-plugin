@@ -23,14 +23,25 @@
    <!-- M3.5: "Ask Claude" trong menu chuot phai cua editor (editor Xtext cua GAMA
         khong hien marker-resolution ngoai, nen menu nay la duong chinh) -->
    <extension point="org.eclipse.ui.commands">
-      <command id="gama.ui.claude.ask" name="Ask Claude: dong nay"/>
+      <command id="gama.ui.claude.ask" name="Ask Claude: this line"/>
    </extension>
    <extension point="org.eclipse.ui.handlers">
       <handler commandId="gama.ui.claude.ask" class="gama.ui.claude.AskClaudeHandler"/>
    </extension>
+   <!-- Xtext editor cua GAMA dung menu rieng nen popup.any co the bi nuot;
+        vi the co them keybinding Ctrl+Alt+C va nut tren toolbar cua view -->
    <extension point="org.eclipse.ui.menus">
       <menuContribution locationURI="popup:org.eclipse.ui.popup.any?after=additions">
-         <command commandId="gama.ui.claude.ask" label="🤖 Ask Claude: dòng này" style="push"/>
+         <command commandId="gama.ui.claude.ask" label="Ask Claude: this line" style="push"/>
       </menuContribution>
+      <menuContribution locationURI="popup:#TextEditorContext?after=additions">
+         <command commandId="gama.ui.claude.ask" label="Ask Claude: this line" style="push"/>
+      </menuContribution>
+   </extension>
+   <extension point="org.eclipse.ui.bindings">
+      <key commandId="gama.ui.claude.ask"
+           sequence="M1+M3+C"
+           schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+           contextId="org.eclipse.ui.contexts.window"/>
    </extension>
 </plugin>
