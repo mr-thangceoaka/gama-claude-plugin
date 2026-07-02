@@ -32,6 +32,11 @@ for _k in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
            "ANTHROPIC_DEFAULT_HAIKU_MODEL"):
     if not os.environ.get(_k):
         os.environ.pop(_k, None)
+# OAuth token is the configured auth: a leftover AUTH_TOKEN/API_KEY from the
+# parent shell (stale proxy) would override it inside the CLI -> drop them
+if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+    os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
+    os.environ.pop("ANTHROPIC_API_KEY", None)
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -95,8 +100,12 @@ async def can_use_tool(tool_name, input_data, context):
 
 SYSTEM_HINT = (
     "You are a GAML/GAMA assistant embedded inside the GAMA IDE via a chat panel. "
-    "Each user message may include the active .gaml file path and live compiler "
-    "diagnostics (from the IDE's Xtext validation - authoritative, exact lines). "
+    "Each user message may include the active .gaml file path, the project_root "
+    "folder, and live compiler diagnostics (from the IDE's Xtext validation - "
+    "authoritative, exact lines). The project_root is the whole model project: "
+    "before non-trivial edits, use Glob/Grep on it to find related .gaml files, "
+    "imports, and includes so you understand the model as a whole, not just the "
+    "open file. "
     "Use Read to inspect code, Edit to fix. Your edits may show an approval card "
     "to the user; if an edit is rejected, respect it and propose an alternative "
     "instead of retrying the same change. After edits the IDE re-validates and "
@@ -112,6 +121,11 @@ def build_prompt(msg):
     af = msg.get("active_file")
     if af:
         parts.append(f"\n\n[context] active_file: {af}")
+    pr = msg.get("project_root")
+    if pr:
+        parts.append(f"[context] project_root: {pr} - the whole model project;"
+                     " explore it with Glob/Grep/Read to understand imports and"
+                     " related files before editing")
     ws = msg.get("workspace_summary")
     if ws:
         parts.append(f"[context] workspace: {ws}")
@@ -191,8 +205,13 @@ async def main():
                     if turn and not turn.done():
                         emit({"type": "error", "text": "Previous turn still running - press Stop to interrupt."})
                         continue
+                    # pham vi Edit/Write: ca project (hoac folder user chon);
+                    # khong co thi lui ve folder cua file dang mo nhu cu
+                    pr = msg.get("project_root") or ""
                     af = msg.get("active_file") or ""
-                    if af:
+                    if pr:
+                        ALLOWED_ROOT["path"] = os.path.abspath(pr)
+                    elif af:
                         ALLOWED_ROOT["path"] = os.path.dirname(os.path.abspath(af))
                     turn = asyncio.create_task(run_turn(client, msg))
                 elif t == "interrupt":

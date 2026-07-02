@@ -41,6 +41,7 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.DirectoryDialog;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
@@ -78,6 +79,12 @@ public class ChatView extends ViewPart {
 	private volatile String lastActiveFile = null;
 	/** M4: duong dan snapshot cho message ke tiep (chup bang nut camera). */
 	private volatile String pendingSnapshot = null;
+	/** M5: root cua project chua file dang mo - pham vi doc/sua cua agent. */
+	private volatile String lastProjectRoot = null;
+	/** M5: folder do user tu chon (toolbar "Context folder"); null = theo project. */
+	private volatile String customRoot = null;
+	/** M5: user vua bam Clear -> dung bao "Agent process exited" khi process chet. */
+	private volatile boolean agentKilledByUser = false;
 
 	private record Diag(String file, String project, int line, int sev, String msg) {}
 
@@ -139,6 +146,14 @@ public class ChatView extends ViewPart {
 					return null;
 				}
 			};
+			// JS goi: claudeClear() -> M5: xoa hoi thoai + kill agent, phien sau sach context
+			new BrowserFunction(browser, "claudeClear") {
+				@Override
+				public Object function(final Object[] args) {
+					clearConversation();
+					return null;
+				}
+			};
 		}
 
 		final Composite bottom = new Composite(sash, SWT.NONE);
@@ -161,6 +176,10 @@ public class ChatView extends ViewPart {
 		tb.add(new Action("Snapshot") {
 			@Override
 			public void run() { takeSnapshot(); }
+		});
+		tb.add(new Action("Context folder") {
+			@Override
+			public void run() { pickContextFolder(); }
 		});
 		getViewSite().getActionBars().updateActionBars();
 
@@ -242,6 +261,10 @@ public class ChatView extends ViewPart {
 					if (l.contains("\"done\"")) { refreshWorkspace(); }
 				}
 			} catch (final IOException ignored) {}
+			if (agentKilledByUser) {
+				agentKilledByUser = false;
+				return;
+			}
 			Display.getDefault().asyncExec(() ->
 					pushToChat("{\"type\":\"error\",\"text\":\"Agent process exited. See log: " + esc(ERR_LOG) + "\"}"));
 		}, "claude-agent-stdout").start();
@@ -261,12 +284,46 @@ public class ChatView extends ViewPart {
 		final String af = lastActiveFile;
 		final String snap = pendingSnapshot;
 		pendingSnapshot = null;
+		// M5: pham vi context = folder user chon, khong thi project cua file dang mo
+		final String root = customRoot != null ? customRoot : lastProjectRoot;
 		final String msg = "{\"type\":\"chat\",\"text\":\"" + esc(text) + "\",\"active_file\":"
 				+ (af == null ? "null" : "\"" + esc(af) + "\"")
 				+ ",\"workspace_summary\":\"" + esc(lastSummary) + "\""
 				+ (snap == null ? "" : ",\"snapshot\":\"" + esc(snap) + "\"")
+				+ (root == null ? "" : ",\"project_root\":\"" + esc(root) + "\"")
 				+ ",\"diagnostics\":" + lastDiagArray + "}";
 		sendRaw(msg, true);
+	}
+
+	/** M5: kill agent de phien ke tiep bat dau voi context sach (JS da tu xoa UI). */
+	private synchronized void clearConversation() {
+		pendingSnapshot = null;
+		if (agentProc != null && agentProc.isAlive()) {
+			agentKilledByUser = true;
+			agentProc.destroy();
+		}
+		agentProc = null;
+		agentIn = null;
+	}
+
+	/** M5: cho user tu chon folder lam pham vi doc/sua; Cancel = quay ve theo project. */
+	private void pickContextFolder() {
+		final Shell shell = browser != null ? browser.getShell() : Display.getDefault().getActiveShell();
+		if (shell == null) { return; }
+		final DirectoryDialog dlg = new DirectoryDialog(shell);
+		dlg.setText("Claude context folder");
+		dlg.setMessage("Choose the folder Claude may read and edit."
+				+ "\nCancel = follow the active file's project automatically.");
+		if (customRoot != null) { dlg.setFilterPath(customRoot); }
+		final String dir = dlg.open();
+		if (dir == null) {
+			customRoot = null;
+			pushToChat("{\"type\":\"info\",\"text\":\"Context folder reset - following the active file's project.\"}");
+		} else {
+			customRoot = dir;
+			pushToChat("{\"type\":\"info\",\"text\":\"Context folder set to: " + esc(dir)
+					+ " - Claude reads and edits inside this folder from the next message.\"}");
+		}
 	}
 
 	/** Ghi 1 dong JSON sang agent. spawnIfNeeded=false: agent chua chay thi bo qua. */
@@ -402,6 +459,8 @@ public class ChatView extends ViewPart {
 		final String active = af == null ? null : String.valueOf(af.getLocation());
 		final String activeProj = af == null || af.getProject() == null ? null : af.getProject().getName();
 		lastActiveFile = active;
+		lastProjectRoot = af == null || af.getProject() == null || af.getProject().getLocation() == null
+				? null : String.valueOf(af.getProject().getLocation());
 
 		diags.sort((a, b) -> {
 			final boolean aa = a.file().equals(active), bb = b.file().equals(active);
@@ -548,14 +607,18 @@ public class ChatView extends ViewPart {
  #btn:disabled{background:#33334a;color:#66667f;cursor:default}
  #stop{background:var(--bad);color:#fff;display:none}
  #snap{background:#232336;border:1px solid var(--line);color:var(--tx)}
+ #clr{background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;
+      cursor:pointer;padding:2px 9px;font-size:13px;margin-left:8px}
+ #clr:hover{color:#ff9c9c;border-color:#5c2e2e}
 </style></head><body>
-<div id='hd'><div id='dot'></div><b>Claude</b>&nbsp;<span style='color:var(--dim);margin-left:0'>GAMA Copilot</span><span>v0.3</span></div>
+<div id='hd'><div id='dot'></div><b>Claude</b>&nbsp;<span style='color:var(--dim);margin-left:0'>GAMA Copilot</span><span>v0.4</span><button id='clr' title='Clear conversation and start a fresh session'>&#128465;</button></div>
 <div id='msgs'></div>
 <div id='bar'><textarea id='in' rows='1' placeholder='Ask about the open GAML model...  (Enter to send / Shift+Enter for a new line)'></textarea><button id='snap' title='Attach a window snapshot to your next message'>&#128247;</button><button id='btn' title='Send'>&#10148;</button><button id='stop' title='Interrupt this turn'>&#9632;</button></div>
 <script>
  var msgs=document.getElementById('msgs'),inp=document.getElementById('in'),
      btn=document.getElementById('btn'),stop=document.getElementById('stop'),
-     snap=document.getElementById('snap'),dot=document.getElementById('dot'),
+     snap=document.getElementById('snap'),clr=document.getElementById('clr'),
+     dot=document.getElementById('dot'),
      cur=null,think=null,toolRow=null;
  function scr(){msgs.scrollTop=msgs.scrollHeight;}
  function md(t){
@@ -580,6 +643,9 @@ public class ChatView extends ViewPart {
  btn.onclick=send;
  stop.onclick=function(){if(window.claudeStop)claudeStop();};
  snap.onclick=function(){if(window.claudeSnap)claudeSnap();};
+ clr.onclick=function(){msgs.innerHTML='';cur=null;think=null;toolRow=null;busy(false);
+   if(window.claudeClear)claudeClear();
+   addInfo('Conversation cleared - your next message starts a fresh session.');};
  function autoh(){inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,110)+'px';}
  inp.addEventListener('input',autoh);
  inp.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});

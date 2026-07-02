@@ -13,7 +13,7 @@ if [ -z "$GAMA_DIR" ]; then
 fi
 G="${GAMA_DIR:?Set GAMA_DIR to your GAMA install folder (the one containing plugins/)}"
 P="$G/plugins"
-VER="0.1.0"
+VER="0.2.0"
 JAR="gama.ui.claude_${VER}.jar"
 
 # --- toolchain: prefer GAMA's bundled JDK, else system javac ---
@@ -35,9 +35,14 @@ rm -rf bin && mkdir -p bin dist
 "$JARTOOL" --create --file "dist/$JAR" --manifest META-INF/MANIFEST.MF plugin.xml -C bin .
 
 # --- install: copy jar + register with simpleconfigurator (backup once) ---
+# older versions must go away, or OSGi keeps loading the stale bundle
+for old in "$P"/gama.ui.claude_*.jar; do
+  [ -e "$old" ] && [ "$(basename "$old")" != "$JAR" ] && rm -f "$old"
+done
 cp "dist/$JAR" "$P/"
 BI="$G/configuration/org.eclipse.equinox.simpleconfigurator/bundles.info"
 cp -n "$BI" "$BI.bak-before-claude" 2>/dev/null || true
-grep -q "^gama.ui.claude," "$BI" || echo "gama.ui.claude,$VER,plugins/$JAR,4,false" >> "$BI"
+grep -v "^gama.ui.claude," "$BI" > "$BI.tmp" && mv "$BI.tmp" "$BI"
+echo "gama.ui.claude,$VER,plugins/$JAR,4,false" >> "$BI"
 
 echo "OK -> $P/$JAR (restart GAMA to load it)"

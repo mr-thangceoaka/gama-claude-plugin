@@ -49,8 +49,8 @@ GAMA (Eclipse RCP + Xtext)
 ```
 
 Guardrails live in code, not prompts: the Python agent only gets Read/Grep/Glob
-plus Edit/Write restricted to the folder of the model you're working on. No
-shell access.
+plus Edit/Write restricted to the project of the model you're working on (or a
+folder you pick via the view's "Context folder" action). No shell access.
 
 ## Install
 
@@ -103,6 +103,13 @@ first install.
       visually inspect displays and charts
 - [x] English-only UI; Ctrl+Alt+C shortcut + view-toolbar "Ask line" button
       (fallbacks for the Xtext editor context menu)
+- [x] M5 (v0.2.0): project-wide context - the agent receives the active file's
+      project root, may edit anywhere inside it, and is prompted to Glob/Grep
+      related .gaml files first; a "Context folder" toolbar action overrides the
+      root manually. Clear-conversation button (trash icon in the header) kills
+      the agent session so the next message starts with zero carried-over
+      context. Installer now removes stale plugin versions so UI updates always
+      load after a GAMA restart.
 
 ## Why not headless?
 
