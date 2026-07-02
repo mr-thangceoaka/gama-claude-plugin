@@ -83,8 +83,13 @@ first install.
 - [x] M1 live diagnostics JSON, library-noise filter, active-file-first
 - [x] M2 chat wired to the agent, auto refresh + revalidate after edits
 - [x] M2.5 diagnostics scoped to the active project (token diet)
-- [x] M3 "Ask Claude" in the quick-fix menu (Ctrl+1 on an error line), edit
-      approval cards with a diff preview (`auto_approve=true` to skip), Stop button
+- [x] M3 "Ask Claude" on error lines, edit approval cards with a diff preview
+      (`auto_approve=true` to skip), Stop button
+- [x] M3.5 UX pass: auto-refresh diagnostics (view open / tab switch / save),
+      "Ask Claude: dòng này" in the editor right-click menu (GAMA's Xtext editor
+      doesn't surface external marker resolutions, so the context menu is the
+      reliable path), chat UI overhaul (markdown, tool chips, typing indicator,
+      readable diagnostics panel)
 - [ ] M4 send display snapshots so the model can see charts/maps
 
 ## Why not headless?

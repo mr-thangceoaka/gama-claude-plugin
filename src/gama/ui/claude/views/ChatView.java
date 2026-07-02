@@ -37,6 +37,8 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.ui.IEditorPart;
+import org.eclipse.ui.IPartListener2;
+import org.eclipse.ui.IWorkbenchPartReference;
 import org.eclipse.ui.part.ViewPart;
 
 /**
@@ -58,6 +60,7 @@ public class ChatView extends ViewPart {
 	private Browser browser;
 	private Text log;
 	private IResourceChangeListener markerListener;
+	private IPartListener2 partListener;
 
 	private Process agentProc;
 	private BufferedWriter agentIn;
@@ -122,22 +125,39 @@ public class ChatView extends ViewPart {
 		final Composite bottom = new Composite(sash, SWT.NONE);
 		bottom.setLayout(new GridLayout(1, false));
 		final Button scan = new Button(bottom, SWT.PUSH);
-		scan.setText("Scan GAML errors → JSON  (tu chay lai khi marker doi)");
+		scan.setText("↻ Refresh diagnostics (tu chay: mo view / doi tab / save)");
 		scan.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 		log = new Text(bottom, SWT.MULTI | SWT.READ_ONLY | SWT.V_SCROLL | SWT.H_SCROLL | SWT.BORDER);
 		log.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-		log.setText("Dang cho marker dau tien... (sua/save mot file .gaml la thay)");
+		log.setText("Dang quet lan dau...");
 		scan.addListener(SWT.Selection, e -> scanMarkers());
-		sash.setWeights(new int[] { 70, 30 });
+		sash.setWeights(new int[] { 75, 25 });
 
+		// tu quet khi: (1) marker doi (save -> Xtext validate lai)
 		markerListener = event -> {
 			if (event.getType() == IResourceChangeEvent.POST_CHANGE) {
-				Display.getDefault().asyncExec(() -> {
-					if (log != null && !log.isDisposed()) { scanMarkers(); }
-				});
+				Display.getDefault().asyncExec(this::scanIfAlive);
 			}
 		};
 		ResourcesPlugin.getWorkspace().addResourceChangeListener(markerListener, IResourceChangeEvent.POST_CHANGE);
+
+		// (2) doi tab editor -> active_file doi
+		partListener = new IPartListener2() {
+			@Override
+			public void partActivated(final IWorkbenchPartReference ref) {
+				if (ref.getPart(false) instanceof IEditorPart) {
+					Display.getDefault().asyncExec(ChatView.this::scanIfAlive);
+				}
+			}
+		};
+		getSite().getPage().addPartListener(partListener);
+
+		// (3) vua mo view: quet lan dau (marker da ton tai tu truoc do)
+		Display.getDefault().timerExec(1500, this::scanIfAlive);
+	}
+
+	private void scanIfAlive() {
+		if (log != null && !log.isDisposed()) { scanMarkers(); }
 	}
 
 	// ------------------------------------------------------------- agent
@@ -339,9 +359,32 @@ public class ChatView extends ViewPart {
 		final String full = "{\"active_file\": " + (active == null ? "null" : "\"" + esc(active) + "\"")
 				+ ", \"diagnostics\": " + lastDiagArray + "}";
 		try { Files.writeString(Paths.get(OUT_FILE), full); } catch (final IOException ignored) {}
-		log.setText("Workspace: " + errs + " err/" + warns + " warn"
-				+ " | gui agent (project " + activeProj + "): " + sErrs + " err/" + sWarns + " warn"
-				+ " | active: " + active + "\n\n" + full);
+
+		// hien thi cho nguoi doc: gon, khong JSON
+		final StringBuilder t = new StringBuilder();
+		t.append("Workspace: ").append(errs).append(" error / ").append(warns).append(" warning");
+		if (activeProj != null) {
+			t.append("   |   gui agent (").append(activeProj).append("): ")
+			 .append(sErrs).append(" error / ").append(sWarns).append(" warning");
+		}
+		t.append("\nActive: ").append(active == null ? "(khong co file .gaml dang mo)" : active).append("\n");
+		String lastFile = null;
+		int shown = 0;
+		for (final Diag d : scoped) {
+			if (shown++ >= 50) { t.append("  ... (").append(scoped.size() - 50).append(" muc nua)\n"); break; }
+			if (!d.file().equals(lastFile)) {
+				lastFile = d.file();
+				t.append("\n").append(shortName(d.file())).append(d.file().equals(active) ? "  (dang mo)" : "").append("\n");
+			}
+			final String m = d.msg().length() > 110 ? d.msg().substring(0, 110) + "..." : d.msg();
+			t.append(String.format("  L%-5d %-7s %s%n", d.line(), sevText(d.sev()), m));
+		}
+		log.setText(t.toString());
+	}
+
+	private static String shortName(final String path) {
+		final int i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+		return i < 0 ? path : path.substring(i + 1);
 	}
 
 	private static String sevText(final int sev) {
@@ -366,63 +409,120 @@ public class ChatView extends ViewPart {
 	private static String chatHtml() {
 		return """
 <!doctype html><html><head><meta charset='utf-8'><style>
- body{margin:0;font-family:'Segoe UI',sans-serif;background:#1e1e28;color:#d8d8e0;display:flex;flex-direction:column;height:100vh}
- #hd{padding:8px 12px;background:#26263a;font-weight:600;font-size:13px}
- #hd small{color:#8a8aa0;font-weight:400}
- #msgs{flex:1;overflow-y:auto;padding:10px;font-size:13px}
- .u{background:#2d3f5e;border-radius:10px 10px 2px 10px;padding:8px 10px;margin:6px 0 6px 40px;white-space:pre-wrap}
- .a{background:#2a2a3c;border-radius:10px 10px 10px 2px;padding:8px 10px;margin:6px 40px 6px 0;white-space:pre-wrap}
- .t{color:#7a7a95;font-size:11px;margin:2px 0 2px 8px}
- .e{color:#ff8080;font-size:12px;margin:4px 8px}
- .p{background:#332b18;border:1px solid #8a6d1f;border-radius:8px;margin:6px 8px;padding:8px;font-size:12px}
- .p pre{background:#1a1a26;border-radius:6px;padding:6px;overflow-x:auto;max-height:220px;margin:6px 0;font-size:11.5px;line-height:1.35}
- .p .del{color:#ff9090}.p .ins{color:#7fdc9a}
- .p button{border:0;border-radius:6px;padding:5px 14px;margin-right:8px;cursor:pointer;font-size:12px}
- .ok{background:#2f7d4f;color:#fff}.no{background:#7d2f2f;color:#fff}
- #bar{display:flex;gap:6px;padding:8px;background:#26263a}
- #in{flex:1;background:#1a1a26;color:#e0e0ea;border:1px solid #3a3a52;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;resize:none}
- #btn{background:#5a5adf;color:#fff;border:0;border-radius:8px;padding:0 16px;cursor:pointer;font-size:13px}
- #btn:disabled{background:#3a3a52}
- #stop{background:#8a3a3a;color:#fff;border:0;border-radius:8px;padding:0 12px;cursor:pointer;font-size:13px;display:none}
+ :root{--bg:#16161e;--panel:#1e1e2a;--line:#2c2c3d;--tx:#e2e2ec;--dim:#8b8ba3;
+       --acc:#7c7cf0;--user:#2f3d63;--good:#3fb26a;--bad:#c05252;--warnb:#8a6d1f}
+ *{box-sizing:border-box}
+ body{margin:0;font-family:'Segoe UI Variable Text','Segoe UI',sans-serif;background:var(--bg);
+      color:var(--tx);display:flex;flex-direction:column;height:100vh;font-size:13px}
+ ::-webkit-scrollbar{width:9px}::-webkit-scrollbar-thumb{background:#33334a;border-radius:5px}
+ ::-webkit-scrollbar-track{background:transparent}
+ #hd{display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--panel);
+     border-bottom:1px solid var(--line)}
+ #dot{width:9px;height:9px;border-radius:50%;background:#4a4a63}
+ #dot.on{background:var(--good);box-shadow:0 0 6px var(--good);animation:pl 1.2s ease-in-out infinite}
+ @keyframes pl{50%{opacity:.45}}
+ #hd b{font-size:13.5px;font-weight:600}
+ #hd span{color:var(--dim);font-size:11.5px;margin-left:auto}
+ #msgs{flex:1;overflow-y:auto;padding:14px 12px 6px}
+ .row{margin:0 0 12px}
+ .lbl{font-size:10.5px;color:var(--dim);margin:0 4px 3px;letter-spacing:.4px;text-transform:uppercase}
+ .u .bd{background:var(--user);border-radius:12px 12px 3px 12px;padding:8px 11px;
+        margin-left:48px;white-space:pre-wrap;line-height:1.45}
+ .u .lbl{text-align:right}
+ .a .bd{background:var(--panel);border:1px solid var(--line);border-radius:12px 12px 12px 3px;
+        padding:9px 12px;margin-right:36px;line-height:1.5;word-wrap:break-word}
+ .a .bd pre{background:#12121a;border:1px solid var(--line);border-radius:7px;padding:8px;
+        overflow-x:auto;font-size:12px;line-height:1.4;margin:6px 0}
+ .a .bd code{background:#12121a;border-radius:4px;padding:1px 5px;font-size:12px}
+ .tools{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 10px 4px}
+ .chip{background:#232336;border:1px solid var(--line);color:var(--dim);border-radius:20px;
+       padding:2px 10px;font-size:11px}
+ .e{color:#ff8f8f;font-size:12px;margin:4px 6px 10px;padding:7px 10px;background:#2c1a1a;
+    border:1px solid #5c2e2e;border-radius:8px}
+ .p{background:#26210f;border:1px solid var(--warnb);border-radius:10px;margin:0 8px 12px 0;padding:10px}
+ .p .ph{font-size:12px;font-weight:600;margin-bottom:2px}
+ .p .pf{font-size:11px;color:var(--dim);word-break:break-all}
+ .p pre{background:#12121a;border-radius:7px;padding:7px;overflow:auto;max-height:230px;
+        margin:8px 0;font-size:11.5px;line-height:1.4}
+ .p .del{color:#ff9c9c}.p .ins{color:#83e0a3}
+ .p button{border:0;border-radius:7px;padding:6px 16px;margin-right:8px;cursor:pointer;
+        font-size:12px;font-weight:600}
+ .ok{background:var(--good);color:#08130c}.no{background:transparent;color:#ff9c9c;
+        border:1px solid #5c2e2e !important}
+ .th .bd{color:var(--dim)}
+ .th .dts:after{content:'';animation:dt 1.4s steps(4) infinite}
+ @keyframes dt{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+ #bar{display:flex;gap:8px;padding:10px 12px;background:var(--panel);border-top:1px solid var(--line)}
+ #in{flex:1;background:#13131c;color:var(--tx);border:1px solid var(--line);border-radius:10px;
+     padding:9px 12px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.4}
+ #in:focus{border-color:var(--acc)}
+ #btn,#stop{border:0;border-radius:10px;width:44px;cursor:pointer;font-size:15px;flex:none}
+ #btn{background:var(--acc);color:#fff}
+ #btn:disabled{background:#33334a;color:#66667f;cursor:default}
+ #stop{background:var(--bad);color:#fff;display:none}
 </style></head><body>
-<div id='hd'>Claude Chat <small>(M3 - quick-fix, diff duyet tay, stop)</small></div>
+<div id='hd'><div id='dot'></div><b>Claude</b>&nbsp;<span style='color:var(--dim);margin-left:0'>GAMA Copilot</span><span>v0.2</span></div>
 <div id='msgs'></div>
-<div id='bar'><textarea id='in' rows='2' placeholder='Hoi ve model GAML dang mo... (Enter gui, Shift+Enter xuong dong)'></textarea><button id='btn'>Gui</button><button id='stop'>Stop</button></div>
+<div id='bar'><textarea id='in' rows='1' placeholder='Hoi ve model GAML dang mo...  (Enter gui / Shift+Enter xuong dong)'></textarea><button id='btn' title='Gui'>➤</button><button id='stop' title='Ngat luot nay'>■</button></div>
 <script>
  var msgs=document.getElementById('msgs'),inp=document.getElementById('in'),
-     btn=document.getElementById('btn'),stop=document.getElementById('stop'),cur=null;
- function add(cls,txt){var d=document.createElement('div');d.className=cls;d.textContent=txt;msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;return d;}
- function busy(b){btn.disabled=b;stop.style.display=b?'block':'none';}
- function send(){var t=inp.value.trim();if(!t)return;add('u',t);inp.value='';cur=null;busy(true);
-   if(window.claudeSend){claudeSend(t);}else{add('e','claudeSend chua san sang');busy(false);}}
+     btn=document.getElementById('btn'),stop=document.getElementById('stop'),
+     dot=document.getElementById('dot'),cur=null,think=null,toolRow=null;
+ function scr(){msgs.scrollTop=msgs.scrollHeight;}
+ function md(t){
+   t=t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+   t=t.replace(/```([\\s\\S]*?)```/g,function(_,c){return '<pre>'+c.replace(/^[a-z]*\\n/,'')+'</pre>';});
+   t=t.replace(/`([^`]+)`/g,'<code>$1</code>');
+   t=t.replace(/\\*\\*([^*]+)\\*\\*/g,'<b>$1</b>');
+   return t.replace(/\\n/g,'<br>');}
+ function row(cls,label){var r=document.createElement('div');r.className='row '+cls;
+   if(label){var l=document.createElement('div');l.className='lbl';l.textContent=label;r.appendChild(l);}
+   var b=document.createElement('div');b.className='bd';r.appendChild(b);
+   msgs.appendChild(r);scr();return{r:r,b:b};}
+ function addUser(t){var x=row('u','Ban');x.b.textContent=t;}
+ function addErr(t){var d=document.createElement('div');d.className='e';d.textContent=t;msgs.appendChild(d);scr();}
+ function busy(on){btn.style.display=on?'none':'block';stop.style.display=on?'block':'none';
+   dot.className=on?'on':'';if(on){think=row('a th','Claude');think.b.innerHTML="Dang suy nghi<span class='dts'></span>";}
+   else if(think){think.r.remove();think=null;}toolRow=null;}
+ function clearThink(){if(think){think.r.remove();think=null;}}
+ function send(){var t=inp.value.trim();if(!t)return;addUser(t);inp.value='';autoh();cur=null;busy(true);
+   if(window.claudeSend){claudeSend(t);}else{addErr('Cau noi Java chua san sang');busy(false);}}
  btn.onclick=send;
- stop.onclick=function(){if(window.claudeStop){claudeStop();add('t','[stop] da gui yeu cau ngat');}};
+ stop.onclick=function(){if(window.claudeStop)claudeStop();};
+ function autoh(){inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,110)+'px';}
+ inp.addEventListener('input',autoh);
  inp.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
- // quick-fix tu editor nhet cau hoi vao chat (Java goi truoc khi sendChat)
- window.extSend=function(t){add('u',t);cur=null;busy(true);};
+ window.extSend=function(t){addUser(t);cur=null;busy(true);};
  function showPerm(m){
+   clearThink();
    var d=document.createElement('div');d.className='p';
-   var h=document.createElement('div');h.textContent='Claude muon sua: '+m.file;d.appendChild(h);
+   var h=document.createElement('div');h.className='ph';h.textContent='Claude de xuat sua file';d.appendChild(h);
+   var pf=document.createElement('div');pf.className='pf';pf.textContent=m.file;d.appendChild(pf);
    var pre=document.createElement('pre');
    (m.diff||'').split('\\n').forEach(function(l){
      var s=document.createElement('div');s.textContent=l;
      if(l.charAt(0)==='-')s.className='del';else if(l.charAt(0)==='+')s.className='ins';
      pre.appendChild(s);});
    d.appendChild(pre);
-   var ok=document.createElement('button');ok.className='ok';ok.textContent='Ap dung';
+   var ok=document.createElement('button');ok.className='ok';ok.textContent='✓ Ap dung';
    var no=document.createElement('button');no.className='no';no.textContent='Tu choi';
-   function fin(ans){ok.disabled=no.disabled=true;d.style.opacity=0.55;
-     h.textContent=(ans?'DA AP DUNG: ':'DA TU CHOI: ')+m.file;
+   function fin(ans){ok.disabled=no.disabled=true;d.style.opacity=.55;
+     h.textContent=ans?'✓ Da ap dung':'✗ Da tu choi';
      if(window.claudePerm)claudePerm(m.id,ans);}
    ok.onclick=function(){fin(true)};no.onclick=function(){fin(false)};
    d.appendChild(ok);d.appendChild(no);
-   msgs.appendChild(d);msgs.scrollTop=msgs.scrollHeight;}
+   msgs.appendChild(d);scr();}
  window.claudeRecv=function(raw){
-   var m;try{m=JSON.parse(raw);}catch(e){add('e','parse: '+raw);return;}
-   if(m.type==='text'){if(!cur){cur=add('a','');}cur.textContent+=(cur.textContent?'\\n':'')+m.text;msgs.scrollTop=msgs.scrollHeight;}
-   else if(m.type==='tool'){add('t','[tool] '+m.name);}
+   var m;try{m=JSON.parse(raw);}catch(e){addErr('parse: '+raw);return;}
+   if(m.type==='text'){clearThink();toolRow=null;
+     if(!cur){cur=row('a','Claude');cur.raw='';}
+     cur.raw+=(cur.raw?'\\n':'')+m.text;cur.b.innerHTML=md(cur.raw);scr();}
+   else if(m.type==='tool'){clearThink();cur=null;
+     if(!toolRow){toolRow=document.createElement('div');toolRow.className='tools';msgs.appendChild(toolRow);}
+     var c=document.createElement('span');c.className='chip';c.textContent='⚙ '+m.name.replace('mcp__gama-tools__','');
+     toolRow.appendChild(c);scr();}
    else if(m.type==='permission'){showPerm(m);}
-   else if(m.type==='error'){add('e',m.text);busy(false);}
+   else if(m.type==='error'){clearThink();addErr(m.text);busy(false);}
    else if(m.type==='done'){cur=null;busy(false);}
  };
 </script></body></html>
@@ -435,6 +535,9 @@ public class ChatView extends ViewPart {
 	public void dispose() {
 		if (markerListener != null) {
 			ResourcesPlugin.getWorkspace().removeResourceChangeListener(markerListener);
+		}
+		if (partListener != null) {
+			try { getSite().getPage().removePartListener(partListener); } catch (final Exception ignored) {}
 		}
 		if (agentProc != null) { agentProc.destroy(); }
 		super.dispose();
