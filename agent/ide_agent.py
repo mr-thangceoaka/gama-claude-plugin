@@ -80,9 +80,12 @@ def build_prompt(msg):
     af = msg.get("active_file")
     if af:
         parts.append(f"\n\n[context] active_file: {af}")
+    ws = msg.get("workspace_summary")
+    if ws:
+        parts.append(f"[context] workspace: {ws}")
     diags = msg.get("diagnostics") or []
     if diags:
-        parts.append("[context] diagnostics (live tu IDE):")
+        parts.append("[context] diagnostics of the ACTIVE PROJECT only (live from IDE):")
         for d in diags[:80]:
             parts.append(f"  {d.get('severity','?')} {d.get('file','?')}:{d.get('line','?')} {d.get('message','')}")
     return "\n".join(parts)

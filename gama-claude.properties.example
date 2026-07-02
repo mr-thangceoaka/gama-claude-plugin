@@ -1,0 +1,19 @@
+# Copy this file to <your home folder>/.gama-claude.properties and fill it in.
+# The plugin reads it when the first chat message is sent.
+
+# Python from a venv that has claude-agent-sdk installed
+python=C:/path/to/venv/Scripts/python.exe
+
+# Absolute path to agent/ide_agent.py in this repo
+script=C:/path/to/gama-claude-plugin/agent/ide_agent.py
+
+# --- auth: pick ONE of the two ---
+# Option A (recommended): OAuth token from your Claude subscription.
+# Run `claude setup-token` once in a terminal, paste the sk-ant-oat01-... here.
+oauth_token=
+
+# Option B: pay-per-use API key from console.anthropic.com (needs credits).
+key=
+
+# Optional, default https://api.anthropic.com
+# base_url=

@@ -65,7 +65,10 @@ public class ChatView extends ViewPart {
 	private volatile String lastDiagArray = "[]";
 	private volatile String lastActiveFile = null;
 
-	private record Diag(String file, int line, int sev, String msg) {}
+	private record Diag(String file, String project, int line, int sev, String msg) {}
+
+	/** Tom tat toan workspace, dinh kem message de agent biet buc tranh lon. */
+	private volatile String lastSummary = "";
 
 	// ------------------------------------------------------------------ UI
 
@@ -186,6 +189,7 @@ public class ChatView extends ViewPart {
 			final String af = lastActiveFile;
 			final String msg = "{\"type\":\"chat\",\"text\":\"" + esc(text) + "\",\"active_file\":"
 					+ (af == null ? "null" : "\"" + esc(af) + "\"")
+					+ ",\"workspace_summary\":\"" + esc(lastSummary) + "\""
 					+ ",\"diagnostics\":" + lastDiagArray + "}";
 			agentIn.write(msg);
 			agentIn.newLine();
@@ -218,13 +222,10 @@ public class ChatView extends ViewPart {
 
 	// ------------------------------------------------------- diagnostics
 
-	private String activeEditorFile() {
+	private IFile activeEditorIFile() {
 		try {
 			final IEditorPart ed = getSite().getPage().getActiveEditor();
-			if (ed != null) {
-				final IFile f = ed.getEditorInput().getAdapter(IFile.class);
-				if (f != null) { return String.valueOf(f.getLocation()); }
-			}
+			if (ed != null) { return ed.getEditorInput().getAdapter(IFile.class); }
 		} catch (final Exception ignored) {}
 		return null;
 	}
@@ -240,9 +241,11 @@ public class ChatView extends ViewPart {
 			final IMarker[] ms = ResourcesPlugin.getWorkspace().getRoot()
 					.findMarkers(IMarker.PROBLEM, true, IResource.DEPTH_INFINITE);
 			for (final IMarker m : ms) {
-				final String path = m.getResource() == null ? "?" : String.valueOf(m.getResource().getLocation());
+				final IResource r = m.getResource();
+				final String path = r == null ? "?" : String.valueOf(r.getLocation());
 				if (!path.toLowerCase().endsWith(".gaml") || isLibraryNoise(path)) { continue; }
-				diags.add(new Diag(path,
+				final String proj = r == null || r.getProject() == null ? "" : r.getProject().getName();
+				diags.add(new Diag(path, proj,
 						m.getAttribute(IMarker.LINE_NUMBER, -1),
 						m.getAttribute(IMarker.SEVERITY, -1),
 						m.getAttribute(IMarker.MESSAGE, "")));
@@ -252,8 +255,11 @@ public class ChatView extends ViewPart {
 			return;
 		}
 
-		final String active = activeEditorFile();
+		final IFile af = activeEditorIFile();
+		final String active = af == null ? null : String.valueOf(af.getLocation());
+		final String activeProj = af == null || af.getProject() == null ? null : af.getProject().getName();
 		lastActiveFile = active;
+
 		diags.sort((a, b) -> {
 			final boolean aa = a.file().equals(active), bb = b.file().equals(active);
 			if (aa != bb) { return aa ? -1 : 1; }
@@ -262,16 +268,32 @@ public class ChatView extends ViewPart {
 			return f != 0 ? f : a.line() - b.line();
 		});
 
+		// dem toan workspace
 		int errs = 0, warns = 0;
-		final StringBuilder arr = new StringBuilder("[");
-		for (int i = 0; i < diags.size(); i++) {
-			final Diag d = diags.get(i);
+		for (final Diag d : diags) {
 			if (d.sev() == IMarker.SEVERITY_ERROR) { errs++; } else if (d.sev() == IMarker.SEVERITY_WARNING) { warns++; }
+		}
+		lastSummary = errs + " errors, " + warns + " warnings across whole workspace";
+
+		// CHI gui cho agent: loi cua project dang mo (context gon, do ton token).
+		// Khong co file dang mo -> khong gui gi ngoai con so tong.
+		final List<Diag> scoped = new ArrayList<>();
+		if (activeProj != null) {
+			for (final Diag d : diags) {
+				if (activeProj.equals(d.project())) { scoped.add(d); }
+				if (scoped.size() >= 120) { break; }
+			}
+		}
+		int sErrs = 0, sWarns = 0;
+		final StringBuilder arr = new StringBuilder("[");
+		for (int i = 0; i < scoped.size(); i++) {
+			final Diag d = scoped.get(i);
+			if (d.sev() == IMarker.SEVERITY_ERROR) { sErrs++; } else if (d.sev() == IMarker.SEVERITY_WARNING) { sWarns++; }
 			arr.append("{\"file\":\"").append(esc(d.file()))
 				.append("\",\"line\":").append(d.line())
 				.append(",\"severity\":\"").append(sevText(d.sev()))
 				.append("\",\"message\":\"").append(esc(d.msg())).append("\"}");
-			if (i < diags.size() - 1) { arr.append(","); }
+			if (i < scoped.size() - 1) { arr.append(","); }
 		}
 		arr.append("]");
 		lastDiagArray = arr.toString();
@@ -279,7 +301,9 @@ public class ChatView extends ViewPart {
 		final String full = "{\"active_file\": " + (active == null ? "null" : "\"" + esc(active) + "\"")
 				+ ", \"diagnostics\": " + lastDiagArray + "}";
 		try { Files.writeString(Paths.get(OUT_FILE), full); } catch (final IOException ignored) {}
-		log.setText(errs + " error, " + warns + " warning | active: " + active + "\n\n" + full);
+		log.setText("Workspace: " + errs + " err/" + warns + " warn"
+				+ " | gui agent (project " + activeProj + "): " + sErrs + " err/" + sWarns + " warn"
+				+ " | active: " + active + "\n\n" + full);
 	}
 
 	private static String sevText(final int sev) {
