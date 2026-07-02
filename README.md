@@ -12,6 +12,14 @@ Built on the [Claude Agent SDK](https://docs.anthropic.com/en/api/agent-sdk/over
 the plugin is a thin Java layer (chat view + marker bridge), the brain is a
 Python agent it spawns locally.
 
+## Screenshots
+
+*A real session: the model had 2 compile errors; the agent read the live
+diagnostics, fixed the file (approval cards on each edit), the IDE re-validated
+and the experiment button came back:*
+
+![Fix session inside GAMA](docs/screenshot-fix-session.png)
+
 ## What it does
 
 - **Chat view docked in GAMA** (WebView2/SWT Browser), aware of the file you
