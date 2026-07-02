@@ -138,8 +138,16 @@ public class ChatView extends ViewPart {
 		}
 
 		final ProcessBuilder pb = new ProcessBuilder(python, script);
-		final String key = p.getProperty("key", "").trim();
-		if (!key.isEmpty()) { pb.environment().put("ANTHROPIC_API_KEY", key); }
+		// Ep subprocess di thang Anthropic, bo qua moi BASE_URL/AUTH_TOKEN
+		// trong ~/.claude/settings.json (env process co uu tien cao hon).
+		// key rong -> CLI dung OAuth login (chay `claude login` 1 lan la xong).
+		final var env = pb.environment();
+		env.put("ANTHROPIC_BASE_URL", p.getProperty("base_url", "https://api.anthropic.com").trim());
+		env.put("ANTHROPIC_AUTH_TOKEN", "");
+		env.put("ANTHROPIC_API_KEY", p.getProperty("key", "").trim());
+		env.put("ANTHROPIC_DEFAULT_SONNET_MODEL", "");
+		env.put("ANTHROPIC_DEFAULT_OPUS_MODEL", "");
+		env.put("ANTHROPIC_DEFAULT_HAIKU_MODEL", "");
 		pb.redirectErrorStream(false);
 		agentProc = pb.start();
 		agentIn = new BufferedWriter(new OutputStreamWriter(agentProc.getOutputStream(), StandardCharsets.UTF_8));
