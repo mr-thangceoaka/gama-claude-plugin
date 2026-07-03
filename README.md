@@ -42,10 +42,18 @@ and the experiment button came back:*
 ```
 GAMA (Eclipse RCP + Xtext)
 └─ gama.ui.claude (this plugin, Java)
-   ├─ ChatView      SWT Browser, chat UI in HTML/JS
-   ├─ MarkerBridge  IMarker -> JSON, auto-rescan on change
-   └─ AgentHost     spawns agent/ide_agent.py, JSON lines over stdio
-                      └─ Claude Agent SDK -> Claude API
+   ├─ ChatView       SWT Browser, chat UI in HTML/JS
+   ├─ MarkerBridge   IMarker -> JSON, auto-rescan on change
+   ├─ ConsoleBridge  read-only console text -> %TEMP% dump, refreshed live
+   └─ AgentHost      spawns agent/ide_agent.py, JSON lines over stdio
+                       └─ Claude Agent SDK -> Claude API
+                          ├─ gaml_semantics/gaml_index  GAML outline parser +
+                          │    mtime-cached workspace index (project map)
+                          ├─ semantic_tools  gaml_outline / find_gaml_symbol /
+                          │    project_map (MCP)
+                          ├─ gama_tools      validate / run batch / run any
+                          │    experiment headless + read outputs (MCP)
+                          └─ edit_history    pre-edit snapshots, undo journal
 ```
 
 Guardrails live in code, not prompts: the Python agent only gets Read/Grep/Glob
@@ -119,6 +127,28 @@ first install.
       scope falls back to the workspace root when no file is open, so "create a
       new project" works from a fresh chat. Fixed the startup greeting eating
       the Stop button / typing indicator on the first turn.
+- [x] M7 (v0.4.0) - the "grand overhaul", four pillars:
+      1. **Workspace index**: every .gaml in the project is parsed and cached
+         (by mtime); each message carries a compact *project map* (files,
+         species, experiments, displays - with line numbers), so the agent
+         thinks in whole-project terms, not just the active file.
+      2. **GAML semantic layer**: a brace-aware outline parser for
+         global/species/grid/experiment/action/reflex/aspect/state/display/
+         chart/monitor/parameter/attributes. Exposed as `gaml_outline` (one
+         file's structure, far cheaper than Read), `find_gaml_symbol`
+         (definitions + reference counts across the project), `project_map`.
+      3. **Runtime observation**: the plugin mirrors the GAMA console to a
+         dump (attached to each message, refreshed every 2 s during a turn,
+         readable via `read_ide_console`); `run_experiment_headless` runs ANY
+         experiment (gui or batch) through a headless XML plan with a step
+         cap, then returns recorded monitor values per step plus display
+         snapshot PNGs the agent can Read to *look at* the result.
+      4. **Safe edit workflow**: approval cards now show a real unified diff
+         (difflib, context lines); every applied edit is snapshotted first -
+         an Undo button appears on the card, and a History button in the
+         header lists the session's edits with per-entry undo (deleting files
+         a Write created, restoring bytes an Edit touched). The IDE
+         re-validates after each undo.
 
 ## Why not headless?
 
