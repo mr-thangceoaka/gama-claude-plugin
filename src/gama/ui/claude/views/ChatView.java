@@ -189,7 +189,7 @@ public class ChatView extends ViewPart {
 		log.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 		log.setText("Scanning...");
 		scan.addListener(SWT.Selection, e -> scanMarkers());
-		sash.setWeights(new int[] { 75, 25 });
+		sash.setWeights(new int[] { 82, 18 });
 
 		// toolbar cua view: duong tat khi menu chuot phai bi editor Xtext nuot
 		final var tb = getViewSite().getActionBars().getToolBarManager();
@@ -228,7 +228,25 @@ public class ChatView extends ViewPart {
 
 		// (3) vua mo view: quet lan dau (marker da ton tai tu truoc do)
 		Display.getDefault().timerExec(1500, this::scanIfAlive);
+
+		// M8.3: badge LIVE tren header - tu cap nhat trang thai sim dang chay
+		Display.getDefault().timerExec(3000, this::simBadgePump);
 	}
+
+	/** M8.3: day trang thai experiment (cycle, paused) len header chat, 2.5s/lan. */
+	private void simBadgePump() {
+		if (browser == null || browser.isDisposed()) { return; }
+		String s = null;
+		try { s = gama.ui.claude.SimBridge.statusBrief(); } catch (final Throwable ignored) {}
+		final String v = s == null ? "" : s;
+		if (!v.equals(lastSimBadge)) {
+			lastSimBadge = v;
+			pushToChat("{\"type\":\"sim_badge\",\"text\":\"" + esc(v) + "\"}");
+		}
+		Display.getDefault().timerExec(2500, this::simBadgePump);
+	}
+
+	private String lastSimBadge = "";
 
 	private void scanIfAlive() {
 		if (log != null && !log.isDisposed()) { scanMarkers(); }
@@ -786,88 +804,155 @@ public class ChatView extends ViewPart {
 	private static String chatHtml() {
 		return """
 <!doctype html><html><head><meta charset='utf-8'><style>
- :root{--bg:#16161e;--panel:#1e1e2a;--line:#2c2c3d;--tx:#e2e2ec;--dim:#8b8ba3;
-       --acc:#7c7cf0;--user:#2f3d63;--good:#3fb26a;--bad:#c05252;--warnb:#8a6d1f}
+ :root{--bg:#101018;--panel:#181822;--panel2:#1e1e2c;--line:#292938;--tx:#e9e9f2;--dim:#9494ae;
+       --acc:#8b7cf8;--acc2:#6a5ae8;--user1:#3d3f96;--user2:#2c2f74;--good:#41c476;--bad:#e06060;
+       --warnb:#8a6d1f;--live:#ff5d5d;--pausedc:#e0a83f}
  *{box-sizing:border-box}
  body{margin:0;font-family:'Segoe UI Variable Text','Segoe UI',sans-serif;background:var(--bg);
       color:var(--tx);display:flex;flex-direction:column;height:100vh;font-size:13px}
- ::-webkit-scrollbar{width:9px}::-webkit-scrollbar-thumb{background:#33334a;border-radius:5px}
- ::-webkit-scrollbar-track{background:transparent}
+ ::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:#30304a;border-radius:5px}
+ ::-webkit-scrollbar-thumb:hover{background:#3d3d5c}::-webkit-scrollbar-track{background:transparent}
  #hd{display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--panel);
-     border-bottom:1px solid var(--line)}
- #dot{width:9px;height:9px;border-radius:50%;background:#4a4a63}
- #dot.on{background:var(--good);box-shadow:0 0 6px var(--good);animation:pl 1.2s ease-in-out infinite}
- @keyframes pl{50%{opacity:.45}}
+     border-bottom:1px solid var(--line);flex:none}
+ #logo{width:20px;height:20px;border-radius:7px;background:linear-gradient(135deg,var(--acc),#c07cf8);
+     display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;font-weight:700}
  #hd b{font-size:13.5px;font-weight:600}
- #hd span{color:var(--dim);font-size:11.5px;margin-left:auto}
- #msgs{flex:1;overflow-y:auto;padding:14px 12px 6px}
- .row{margin:0 0 12px}
- .lbl{font-size:10.5px;color:var(--dim);margin:0 4px 3px;letter-spacing:.4px;text-transform:uppercase}
- .u .bd{background:var(--user);border-radius:12px 12px 3px 12px;padding:8px 11px;
-        margin-left:48px;white-space:pre-wrap;line-height:1.45}
+ #hd .sub{color:var(--dim);font-size:11.5px}
+ #dot{width:8px;height:8px;border-radius:50%;background:#4a4a63;margin-left:2px}
+ #dot.on{background:var(--good);box-shadow:0 0 7px var(--good);animation:pl 1.2s ease-in-out infinite}
+ @keyframes pl{50%{opacity:.4}}
+ #sim{display:none;align-items:center;gap:6px;margin-left:auto;padding:3px 10px;border-radius:20px;
+     background:#231a22;border:1px solid #4a2b33;font-size:11px;color:#f0b9b9;white-space:nowrap;
+     max-width:46%;overflow:hidden;text-overflow:ellipsis}
+ #sim i{width:7px;height:7px;border-radius:50%;background:var(--live);flex:none;
+     box-shadow:0 0 6px var(--live);animation:pl 1.1s ease-in-out infinite}
+ #sim.pz{background:#242012;border-color:#5c4d1f;color:#eed9a0}
+ #sim.pz i{background:var(--pausedc);box-shadow:0 0 6px var(--pausedc);animation:none}
+ #hd .btns{margin-left:auto;display:flex;gap:6px;align-items:center}
+ #sim[style*='flex']~.btns{margin-left:8px}
+ #hd .ver{color:#55556e;font-size:10.5px;margin-right:2px}
+ #clr,#hist{background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:8px;
+      cursor:pointer;padding:3px 9px;font-size:13px;transition:all .15s}
+ #clr:hover{color:#ff9c9c;border-color:#5c2e2e}
+ #hist:hover{color:var(--tx);border-color:var(--acc)}
+ #msgs{flex:1;overflow-y:auto;padding:16px 14px 8px}
+ .row{margin:0 0 13px;animation:up .18s ease}
+ @keyframes up{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+ .lbl{font-size:10px;color:var(--dim);margin:0 6px 4px;letter-spacing:.6px;text-transform:uppercase}
+ .u .bd{background:linear-gradient(135deg,var(--user1),var(--user2));border-radius:14px 14px 4px 14px;
+        padding:9px 13px;margin-left:52px;white-space:pre-wrap;line-height:1.5;
+        box-shadow:0 2px 10px rgba(40,40,120,.25)}
  .u .lbl{text-align:right}
- .a .bd{background:var(--panel);border:1px solid var(--line);border-radius:12px 12px 12px 3px;
-        padding:9px 12px;margin-right:36px;line-height:1.5;word-wrap:break-word}
- .a .bd pre{background:#12121a;border:1px solid var(--line);border-radius:7px;padding:8px;
-        overflow-x:auto;font-size:12px;line-height:1.4;margin:6px 0}
- .a .bd code{background:#12121a;border-radius:4px;padding:1px 5px;font-size:12px}
- .tools{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 10px 4px}
- .chip{background:#232336;border:1px solid var(--line);color:var(--dim);border-radius:20px;
-       padding:2px 10px;font-size:11px}
- .e{color:#ff8f8f;font-size:12px;margin:4px 6px 10px;padding:7px 10px;background:#2c1a1a;
-    border:1px solid #5c2e2e;border-radius:8px}
- .i{color:var(--dim);font-size:11.5px;margin:2px 6px 10px;padding:5px 10px;background:#20202e;
-    border:1px solid var(--line);border-radius:8px}
- .p{background:#26210f;border:1px solid var(--warnb);border-radius:10px;margin:0 8px 12px 0;padding:10px}
+ .a .bd{background:var(--panel);border:1px solid var(--line);border-radius:14px 14px 14px 4px;
+        padding:10px 13px;margin-right:34px;line-height:1.55;word-wrap:break-word}
+ .a .bd pre{background:#0d0d14;border:1px solid var(--line);border-radius:8px;padding:9px 10px;
+        overflow-x:auto;font-size:12px;line-height:1.45;margin:7px 0;
+        font-family:Consolas,'Cascadia Mono',monospace}
+ .a .bd code{background:#0d0d14;border:1px solid #23233a;border-radius:5px;padding:1px 5px;
+        font-size:12px;font-family:Consolas,'Cascadia Mono',monospace;color:#c8bfff}
+ .a .bd .h2{font-size:14px;font-weight:700;margin:8px 0 2px}
+ .a .bd .h3{font-size:13px;font-weight:600;margin:6px 0 1px;color:#cfc8ff}
+ .a .bd .li{margin:1px 0 1px 6px}
+ .tools{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 11px 4px}
+ .chip{display:inline-flex;align-items:center;gap:5px;background:var(--panel2);
+       border:1px solid var(--line);color:var(--dim);border-radius:20px;
+       padding:2px 10px 2px 7px;font-size:11px;animation:up .15s ease}
+ .e{color:#ff8f8f;font-size:12px;margin:4px 6px 11px;padding:8px 11px;background:#2c1a1a;
+    border:1px solid #5c2e2e;border-radius:10px}
+ .i{color:var(--dim);font-size:11.5px;margin:2px 6px 11px;padding:6px 11px;background:#1d1d2a;
+    border:1px solid var(--line);border-radius:10px}
+ .p{background:#221e10;border:1px solid var(--warnb);border-radius:12px;margin:0 8px 13px 0;
+    padding:11px;animation:up .18s ease}
  .p .ph{font-size:12px;font-weight:600;margin-bottom:2px}
  .p .pf{font-size:11px;color:var(--dim);word-break:break-all}
- .p pre{background:#12121a;border-radius:7px;padding:7px;overflow:auto;max-height:230px;
-        margin:8px 0;font-size:11.5px;line-height:1.4}
+ .p pre{background:#0d0d14;border-radius:8px;padding:8px;overflow:auto;max-height:230px;
+        margin:8px 0;font-size:11.5px;line-height:1.45;font-family:Consolas,monospace}
  .p .del{color:#ff9c9c}.p .ins{color:#83e0a3}
- .p button{border:0;border-radius:7px;padding:6px 16px;margin-right:8px;cursor:pointer;
-        font-size:12px;font-weight:600}
+ .p button{border:0;border-radius:8px;padding:6px 16px;margin-right:8px;cursor:pointer;
+        font-size:12px;font-weight:600;transition:filter .15s}
+ .p button:hover{filter:brightness(1.15)}
  .ok{background:var(--good);color:#08130c}.no{background:transparent;color:#ff9c9c;
         border:1px solid #5c2e2e !important}
+ .p .undo{background:transparent;color:#ffd98a;border:1px solid var(--warnb) !important}
  .th .bd{color:var(--dim)}
  .th .dts:after{content:'';animation:dt 1.4s steps(4) infinite}
  @keyframes dt{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
- #bar{display:flex;gap:8px;padding:10px 12px;background:var(--panel);border-top:1px solid var(--line)}
- #in{flex:1;background:#13131c;color:var(--tx);border:1px solid var(--line);border-radius:10px;
-     padding:9px 12px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.4}
- #in:focus{border-color:var(--acc)}
- #btn,#stop,#snap{border:0;border-radius:10px;width:44px;cursor:pointer;font-size:15px;flex:none}
- #btn{background:var(--acc);color:#fff}
- #btn:disabled{background:#33334a;color:#66667f;cursor:default}
+ #wel{display:flex;flex-direction:column;align-items:center;justify-content:center;
+      height:100%;text-align:center;padding:0 18px;animation:up .3s ease}
+ #wel .big{width:46px;height:46px;border-radius:15px;font-size:24px;
+      background:linear-gradient(135deg,var(--acc),#c07cf8);display:flex;align-items:center;
+      justify-content:center;color:#fff;font-weight:700;box-shadow:0 4px 24px rgba(139,124,248,.35)}
+ #wel h1{font-size:16px;margin:12px 0 3px;font-weight:650}
+ #wel p{color:var(--dim);font-size:12px;margin:0 0 18px;line-height:1.5}
+ #sugg{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;max-width:430px}
+ .sg{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+     font-size:12px;color:var(--tx);text-align:left;cursor:pointer;line-height:1.4;
+     transition:all .15s;display:flex;gap:8px;align-items:flex-start}
+ .sg:hover{border-color:var(--acc);background:var(--panel2);transform:translateY(-1px)}
+ .sg .ic{font-size:15px;flex:none;margin-top:1px}
+ .sg .tx b{display:block;font-size:12px;margin-bottom:1px}
+ .sg .tx span{color:var(--dim);font-size:11px}
+ #bar{display:flex;gap:8px;padding:10px 12px;background:var(--panel);
+      border-top:1px solid var(--line);flex:none;align-items:flex-end}
+ #in{flex:1;background:#13131d;color:var(--tx);border:1px solid var(--line);border-radius:12px;
+     padding:9px 13px;font-size:13px;font-family:inherit;resize:none;outline:none;line-height:1.45;
+     transition:border-color .15s}
+ #in:focus{border-color:var(--acc);box-shadow:0 0 0 2px rgba(139,124,248,.15)}
+ #btn,#stop,#snap{border:0;border-radius:11px;width:40px;height:38px;cursor:pointer;
+     font-size:15px;flex:none;transition:filter .15s}
+ #btn:hover,#stop:hover,#snap:hover{filter:brightness(1.15)}
+ #btn{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff}
+ #btn:disabled{background:#2c2c40;color:#66667f;cursor:default}
  #stop{background:var(--bad);color:#fff;display:none}
- #snap{background:#232336;border:1px solid var(--line);color:var(--tx)}
- #clr,#hist{background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:7px;
-      cursor:pointer;padding:2px 9px;font-size:13px;margin-left:8px}
- #clr:hover{color:#ff9c9c;border-color:#5c2e2e}
- #hist:hover{color:var(--tx);border-color:var(--acc)}
- .p .undo{background:transparent;color:#ffd98a;border:1px solid var(--warnb) !important}
+ #snap{background:var(--panel2);border:1px solid var(--line);color:var(--tx)}
 </style></head><body>
-<div id='hd'><div id='dot'></div><b>Claude</b>&nbsp;<span style='color:var(--dim);margin-left:0'>GAMA Copilot</span><span>v0.7</span><button id='hist' title='Edit history - undo applied edits'>&#128336;</button><button id='clr' title='Clear conversation and start a fresh session'>&#128465;</button></div>
-<div id='msgs'></div>
-<div id='bar'><textarea id='in' rows='1' placeholder='Ask about the open GAML model...  (Enter to send / Shift+Enter for a new line)'></textarea><button id='snap' title='Attach a window snapshot to your next message'>&#128247;</button><button id='btn' title='Send'>&#10148;</button><button id='stop' title='Interrupt this turn'>&#9632;</button></div>
+<div id='hd'><div id='logo'>C</div><b>Claude</b><span class='sub'>GAMA Copilot</span><div id='dot'></div><span id='sim'><i></i><em id='simtx' style='font-style:normal;overflow:hidden;text-overflow:ellipsis'></em></span><div class='btns'><span class='ver'>v0.8</span><button id='hist' title='Edit history - undo applied edits'>&#128336;</button><button id='clr' title='Clear conversation and start a fresh session'>&#128465;</button></div></div>
+<div id='msgs'><div id='wel'><div class='big'>C</div><h1>Claude in GAMA</h1><p>Your model, your diagnostics, your <b>running simulation</b> - one chat.<br>Pick one to try:</p><div id='sugg'></div></div></div>
+<div id='bar'><textarea id='in' rows='1' placeholder='Ask about your model or the running simulation...  (Enter to send)'></textarea><button id='snap' title='Attach a window snapshot to your next message'>&#128247;</button><button id='btn' title='Send'>&#10148;</button><button id='stop' title='Interrupt this turn'>&#9632;</button></div>
 <script>
  var msgs=document.getElementById('msgs'),inp=document.getElementById('in'),
      btn=document.getElementById('btn'),stop=document.getElementById('stop'),
      snap=document.getElementById('snap'),clr=document.getElementById('clr'),
      hist=document.getElementById('hist'),dot=document.getElementById('dot'),
+     sim=document.getElementById('sim'),simtx=document.getElementById('simtx'),
+     wel=document.getElementById('wel'),
      cur=null,think=null,toolRow=null,permCards={};
- function scr(){msgs.scrollTop=msgs.scrollHeight;}
+ var SUGG=[
+  ['\\ud83d\\udd34','Live simulation','What is happening in my running simulation right now?'],
+  ['\\ud83e\\ude7a','Fix errors','Fix the compile errors in this project.'],
+  ['\\ud83d\\uddfa\\ufe0f','Explain model','Explain the structure of this model: species, experiments, displays.'],
+  ['\\u25b6\\ufe0f','Run & verify','Run a short experiment headless and check the behaviour.']];
+ var sg=document.getElementById('sugg');
+ SUGG.forEach(function(s){var d=document.createElement('div');d.className='sg';
+   d.innerHTML="<span class='ic'>"+s[0]+"</span><span class='tx'><b>"+s[1]+"</b><span>"+s[2]+"</span></span>";
+   d.onclick=function(){inp.value=s[2];send();};sg.appendChild(d);});
+ var TOOLICON={Read:'\\ud83d\\udcd6',Edit:'\\u270f\\ufe0f',Write:'\\ud83d\\udcdd',Grep:'\\ud83d\\udd0e',
+   Glob:'\\ud83d\\uddc2\\ufe0f',gaml_outline:'\\ud83e\\udded',find_gaml_symbol:'\\ud83e\\udded',
+   project_map:'\\ud83d\\uddfa\\ufe0f',validate_gaml_syntax:'\\ud83e\\uddea',
+   run_gama_headless:'\\u25b6\\ufe0f',run_experiment_headless:'\\u25b6\\ufe0f',
+   read_ide_console:'\\ud83d\\udda5\\ufe0f',sim_status:'\\ud83d\\udd34',sim_eval:'\\ud83d\\udd34',
+   sim_control:'\\u23ef\\ufe0f',sim_snapshot:'\\ud83d\\udcf8'};
+ function hideWel(){if(wel){wel.remove();wel=null;}}
+ function scr(f){if(f||msgs.scrollHeight-msgs.scrollTop-msgs.clientHeight<170){msgs.scrollTop=msgs.scrollHeight;}}
  function md(t){
+   var P=[];
    t=t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-   t=t.replace(/```([\\s\\S]*?)```/g,function(_,c){return '<pre>'+c.replace(/^[a-z]*\\n/,'')+'</pre>';});
+   t=t.replace(/```([\\s\\S]*?)```/g,function(_,c){P.push(c.replace(/^[a-z]*\\n/,''));
+     return '\\u0001'+(P.length-1)+'\\u0001';});
    t=t.replace(/`([^`]+)`/g,'<code>$1</code>');
+   t=t.replace(/^#{1,2} (.*)$/gm,'<div class=\\"h2\\">$1</div>');
+   t=t.replace(/^### (.*)$/gm,'<div class=\\"h3\\">$1</div>');
+   t=t.replace(/^[-*] (.*)$/gm,'<div class=\\"li\\">\\u2022 $1</div>');
    t=t.replace(/\\*\\*([^*]+)\\*\\*/g,'<b>$1</b>');
-   return t.replace(/\\n/g,'<br>');}
+   t=t.replace(/<\\/div>\\n/g,'</div>');
+   t=t.replace(/\\n/g,'<br>');
+   return t.replace(/\\u0001(\\d+)\\u0001/g,function(_,i){return '<pre>'+P[i]+'</pre>';});}
  function row(cls,label){var r=document.createElement('div');r.className='row '+cls;
    if(label){var l=document.createElement('div');l.className='lbl';l.textContent=label;r.appendChild(l);}
    var b=document.createElement('div');b.className='bd';r.appendChild(b);
-   msgs.appendChild(r);scr();return{r:r,b:b};}
- function addUser(t){var x=row('u','You');x.b.textContent=t;}
- function addErr(t){var d=document.createElement('div');d.className='e';d.textContent=t;msgs.appendChild(d);scr();}
+   msgs.appendChild(r);scr(true);return{r:r,b:b};}
+ function addUser(t){hideWel();var x=row('u','You');x.b.textContent=t;}
+ function addErr(t){hideWel();var d=document.createElement('div');d.className='e';d.textContent=t;msgs.appendChild(d);scr(true);}
  function addInfo(t){var d=document.createElement('div');d.className='i';d.textContent=t;msgs.appendChild(d);scr();}
  function busy(on){btn.style.display=on?'none':'block';stop.style.display=on?'block':'none';
    dot.className=on?'on':'';if(on){think=row('a th','Claude');think.b.innerHTML="Thinking<span class='dts'></span>";}
@@ -886,8 +971,14 @@ public class ChatView extends ViewPart {
  inp.addEventListener('input',autoh);
  inp.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
  window.extSend=function(t){addUser(t);cur=null;busy(true);};
+ function setSim(t){
+   if(!t){sim.style.display='none';return;}
+   var m=t.match(/experiment '([^']*)' - (\\w+), (.*)/);
+   simtx.textContent=m?(m[1]+' \\u00b7 '+m[3]):t;
+   sim.className=t.indexOf('PAUSED')>=0?'pz':'';
+   sim.style.display='inline-flex';}
  function showPerm(m){
-   clearThink();
+   hideWel();clearThink();
    var d=document.createElement('div');d.className='p';
    var h=document.createElement('div');h.className='ph';h.textContent='Claude proposes an edit';d.appendChild(h);
    var pf=document.createElement('div');pf.className='pf';pf.textContent=m.file;d.appendChild(pf);
@@ -905,7 +996,7 @@ public class ChatView extends ViewPart {
    ok.onclick=function(){fin(true)};no.onclick=function(){fin(false)};
    d.appendChild(ok);d.appendChild(no);
    permCards[m.id]=d;
-   msgs.appendChild(d);scr();}
+   msgs.appendChild(d);scr(true);}
  function showHistory(items){
    var d=document.createElement('div');d.className='p';
    var h=document.createElement('div');h.className='ph';h.textContent='Edit history (this session)';d.appendChild(h);
@@ -919,15 +1010,17 @@ public class ChatView extends ViewPart {
        u.onclick=function(){u.disabled=true;if(window.claudeUndo)claudeUndo(it.seq);};
        r.appendChild(u);}
      d.appendChild(r);});
-   msgs.appendChild(d);scr();}
+   msgs.appendChild(d);scr(true);}
  window.claudeRecv=function(raw){
    var m;try{m=JSON.parse(raw);}catch(e){addErr('parse: '+raw);return;}
-   if(m.type==='text'){clearThink();toolRow=null;
+   if(m.type==='text'){hideWel();clearThink();toolRow=null;
      if(!cur){cur=row('a','Claude');cur.raw='';}
      cur.raw+=(cur.raw?'\\n':'')+m.text;cur.b.innerHTML=md(cur.raw);scr();}
-   else if(m.type==='tool'){clearThink();cur=null;
+   else if(m.type==='tool'){hideWel();clearThink();cur=null;
      if(!toolRow){toolRow=document.createElement('div');toolRow.className='tools';msgs.appendChild(toolRow);}
-     var c=document.createElement('span');c.className='chip';c.textContent='* '+m.name;
+     var c=document.createElement('span');c.className='chip';
+     var ic=TOOLICON[m.name]||'\\u2699\\ufe0f';
+     c.innerHTML="<span>"+ic+"</span>"+m.name.replace(/_/g,' ');
      toolRow.appendChild(c);scr();}
    else if(m.type==='permission'){showPerm(m);}
    else if(m.type==='applied'){
@@ -938,6 +1031,7 @@ public class ChatView extends ViewPart {
      else{addInfo('Edit #'+m.seq+' applied to '+m.file+' (undo via the history button)');}}
    else if(m.type==='history'){showHistory(m.items);}
    else if(m.type==='undo_done'){addInfo(m.text);}
+   else if(m.type==='sim_badge'){setSim(m.text);}
    else if(m.type==='info'){addInfo(m.text);}
    else if(m.type==='error'){clearThink();addErr(m.text);busy(false);}
    else if(m.type==='done'){cur=null;busy(false);}
