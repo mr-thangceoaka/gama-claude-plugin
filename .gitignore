@@ -3,3 +3,6 @@ dist/
 
 *.properties
 DEVLOG.private.md
+
+__pycache__/
+*.pyc
