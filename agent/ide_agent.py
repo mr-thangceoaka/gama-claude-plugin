@@ -42,6 +42,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     PermissionResultAllow,
     PermissionResultDeny,
     ResultMessage,
@@ -54,8 +55,19 @@ from gama_tools import gama_tools_server
 AUTO_APPROVE = os.environ.get("GAMA_CLAUDE_AUTO_APPROVE", "false").lower() == "true"
 MODEL = os.environ.get("GAMA_CLAUDE_MODEL", "").strip() or "claude-opus-4-8"
 ALLOWED_ROOT = {"path": ""}
+ALLOWED_READ_EXTRA = set()   # file le duoc phep doc ngoai root (snapshot PNG trong %TEMP%)
 PENDING = {}          # id -> Future[bool] cho cac the duyet dang cho
 _ids = itertools.count(1)
+
+
+def _in_root(path):
+    root = ALLOWED_ROOT["path"]
+    if not root or not path:
+        return False
+    try:
+        return os.path.commonpath([os.path.abspath(path), root]) == root
+    except ValueError:  # khac o dia tren Windows
+        return False
 
 
 def emit(obj):
@@ -73,9 +85,37 @@ def _diff_preview(tool, input_data):
     return "\n".join(out)[:4000]
 
 
+def _read_denial(tool_name, input_data):
+    """Ly do chan neu tool doc cham ra ngoai context root, None = cho qua.
+    Read-only tools KHONG di qua can_use_tool o permission_mode default,
+    nen phai chan bang PreToolUse hook."""
+    p = input_data.get("file_path") or input_data.get("path") or ""
+    if tool_name == "Read" and p and os.path.abspath(p) in ALLOWED_READ_EXTRA:
+        return None  # snapshot PNG dinh kem message
+    if _in_root(p):
+        return None
+    root = ALLOWED_ROOT["path"] or "(no folder in scope yet)"
+    if not p:
+        return f"Pass an explicit path inside the context folder: {root}"
+    return (f"Reading outside the context folder is blocked: {root}. "
+            "Ask the user to change it via the view's 'Context folder' button if needed.")
+
+
+async def read_scope_hook(input_data, tool_use_id, context):
+    reason = _read_denial(input_data.get("tool_name", ""),
+                          input_data.get("tool_input") or {})
+    if reason is None:
+        return {}
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                   "permissionDecision": "deny",
+                                   "permissionDecisionReason": reason}}
+
+
 async def can_use_tool(tool_name, input_data, context):
     if tool_name in ("Read", "Glob", "Grep"):
-        return PermissionResultAllow()
+        # phong ho: neu co di qua day thi ap cung mot luat voi hook
+        reason = _read_denial(tool_name, input_data)
+        return PermissionResultAllow() if reason is None else PermissionResultDeny(message=reason)
     if tool_name.startswith("mcp__gama-tools__"):
         return PermissionResultAllow()
     if tool_name in ("Write", "Edit"):
@@ -109,7 +149,11 @@ SYSTEM_HINT = (
     "authoritative, exact lines). The project_root is the whole model project: "
     "before non-trivial edits, use Glob/Grep on it to find related .gaml files, "
     "imports, and includes so you understand the model as a whole, not just the "
-    "open file. "
+    "open file. Read/Glob/Grep are HARD-LIMITED to project_root - do not try to "
+    "browse other projects or the GAMA install; read only what the task needs "
+    "(other people's models are private and reading them wastes tokens). If you "
+    "genuinely need something outside, ask the user to widen the scope via the "
+    "'Context folder' toolbar button. "
     "Use Read to inspect code, Edit to fix. Your edits may show an approval card "
     "to the user; if an edit is rejected, respect it and propose an alternative "
     "instead of retrying the same change. If a Write/Edit is DENIED by policy "
@@ -198,6 +242,9 @@ async def main():
                        "mcp__gama-tools__run_gama_headless"],
         permission_mode="default",
         can_use_tool=can_use_tool,
+        hooks={"PreToolUse": [HookMatcher(matcher="Read", hooks=[read_scope_hook]),
+                              HookMatcher(matcher="Glob", hooks=[read_scope_hook]),
+                              HookMatcher(matcher="Grep", hooks=[read_scope_hook])]},
         system_prompt={"type": "preset", "preset": "claude_code", "append": SYSTEM_HINT},
         max_turns=40,
     )
@@ -235,6 +282,9 @@ async def main():
                         ALLOWED_ROOT["path"] = os.path.abspath(pr)
                     elif af:
                         ALLOWED_ROOT["path"] = os.path.dirname(os.path.abspath(af))
+                    snap = msg.get("snapshot")
+                    if snap:
+                        ALLOWED_READ_EXTRA.add(os.path.abspath(snap))
                     turn = asyncio.create_task(run_turn(client, msg))
                 elif t == "interrupt":
                     if turn and not turn.done():
