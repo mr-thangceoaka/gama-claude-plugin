@@ -7,11 +7,13 @@ vao  (stdin) : {"type":"chat","text","active_file","project_root","console",
                {"type":"permission_reply","id":N,"allow":true/false}
                {"type":"undo","seq":N}        <- M7: hoan tac 1 edit da apply
                {"type":"history"}             <- M7: xin danh sach edit
+               {"type":"sim_reply","id":N,"text"}  <- M8: IDE tra ket qua 1 sim_cmd
 ra   (stdout): {"type":"text"|"tool"|"done"|"error"|"info"}
                {"type":"permission","id":N,"file","tool","diff"}  <- the duyet Edit
                {"type":"applied","id":N,"seq":M,"file"}           <- edit da ap dung
                {"type":"history","items":[...]}
                {"type":"undo_done","seq":N,"text"}
+               {"type":"sim_cmd","id":N,"op",...}  <- M8: RPC sang GAMA runtime
 
 M3: dispatcher chay song song voi luot agent -> Stop va duyet diff hoat dong
 ngay giua chung luot. Edit/Write mac dinh phai duoc user "Ap dung" trong chat
@@ -62,8 +64,10 @@ from claude_agent_sdk import (
 import edit_history
 import gaml_index
 import scope
+import sim_tools
 from gama_tools import gama_tools_server
 from semantic_tools import semantic_tools_server
+from sim_tools import sim_tools_server
 
 AUTO_APPROVE = os.environ.get("GAMA_CLAUDE_AUTO_APPROVE", "false").lower() == "true"
 MODEL = os.environ.get("GAMA_CLAUDE_MODEL", "").strip() or "claude-opus-4-8"
@@ -148,7 +152,7 @@ async def can_use_tool(tool_name, input_data, context):
         # phong ho: neu co di qua day thi ap cung mot luat voi hook
         reason = _read_denial(tool_name, input_data)
         return PermissionResultAllow() if reason is None else PermissionResultDeny(message=reason)
-    if tool_name.startswith("mcp__gama-tools__") or tool_name.startswith("mcp__gaml-tools__"):
+    if tool_name.startswith(("mcp__gama-tools__", "mcp__gaml-tools__", "mcp__gama-sim__")):
         return PermissionResultAllow()
     if tool_name in ("Write", "Edit"):
         fp = os.path.abspath(input_data.get("file_path", ""))
@@ -202,7 +206,18 @@ SYSTEM_HINT = (
     "plainly - NEVER claim you changed a file when the call failed. After "
     "edits the IDE re-validates and the NEXT message carries fresh "
     "diagnostics - don't guess whether a fix compiled. "
-    "You have NO shell, but you can OBSERVE runtime behaviour: "
+    "LIVE SIMULATION: when a [context] live-simulation line appears, the user "
+    "has an experiment RUNNING in the IDE and you can work INSIDE it - "
+    "sim_status (cycle, parameters, monitors, displays), sim_eval (any GAML "
+    "expression or statement against the live world: read `length(prey)`, "
+    "act `ask prey { energy <- 1.0; }` or `create predator number: 5;` - "
+    "changes show up on the user's displays immediately), sim_control "
+    "(pause/resume/step N cycles/reload), sim_snapshot (PNG of each display; "
+    "Read it to SEE what the user sees). Prefer pause -> inspect/act -> "
+    "resume on fast models; never reload or overwrite live state unless "
+    "asked. This is ALWAYS better than guessing from code when a sim is up. "
+    "You have NO shell, but you can OBSERVE runtime behaviour even without "
+    "a live sim: "
     "validate_gaml_syntax(gaml, experiment) compile-checks a model; "
     "run_experiment_headless(gaml, experiment, final_step) actually runs it "
     "(gui or batch) and returns monitor values per step plus display-snapshot "
@@ -233,6 +248,11 @@ def build_prompt(msg):
     ws = msg.get("workspace_summary")
     if ws:
         parts.append(f"[context] workspace: {ws}")
+    sim = (msg.get("sim") or "").strip()
+    if sim:
+        parts.append("[context] LIVE simulation open in the IDE: " + sim
+                     + " - you can observe/steer it right now with sim_status /"
+                     " sim_eval / sim_control / sim_snapshot")
     con = (msg.get("console") or "").strip()
     if con:
         parts.append("[context] GAMA console tail (runtime output of the "
@@ -281,10 +301,12 @@ async def run_turn(client, msg):
 
 
 async def main():
+    sim_tools.bind(emit)  # M8: sim_cmd di ra stdout cung kenh voi moi output khac
     options = ClaudeAgentOptions(
         model=MODEL,
         mcp_servers={"gama-tools": gama_tools_server,
-                     "gaml-tools": semantic_tools_server},
+                     "gaml-tools": semantic_tools_server,
+                     "gama-sim": sim_tools_server},
         allowed_tools=["Read", "Grep", "Glob", "Edit", "Write",
                        "mcp__gama-tools__validate_gaml_syntax",
                        "mcp__gama-tools__run_gama_headless",
@@ -292,7 +314,11 @@ async def main():
                        "mcp__gama-tools__read_ide_console",
                        "mcp__gaml-tools__gaml_outline",
                        "mcp__gaml-tools__find_gaml_symbol",
-                       "mcp__gaml-tools__project_map"],
+                       "mcp__gaml-tools__project_map",
+                       "mcp__gama-sim__sim_status",
+                       "mcp__gama-sim__sim_control",
+                       "mcp__gama-sim__sim_eval",
+                       "mcp__gama-sim__sim_snapshot"],
         permission_mode="default",
         can_use_tool=can_use_tool,
         hooks={"PreToolUse": [HookMatcher(matcher="Read", hooks=[read_scope_hook]),
@@ -349,6 +375,11 @@ async def main():
                     for fut in list(PENDING.values()):
                         if not fut.done():
                             fut.set_result(False)
+                    # M8: nha luon cac sim_cmd dang doi IDE tra loi
+                    sim_tools.fail_all("turn interrupted by user")
+                elif t == "sim_reply":
+                    # M8: ket qua 1 lenh sim tu plugin -> danh thuc tool dang doi
+                    sim_tools.resolve(msg)
                 elif t == "permission_reply":
                     fut = PENDING.get(msg.get("id"))
                     if fut and not fut.done():

@@ -13,7 +13,7 @@ if [ -z "$GAMA_DIR" ]; then
 fi
 G="${GAMA_DIR:?Set GAMA_DIR to your GAMA install folder (the one containing plugins/)}"
 P="$G/plugins"
-VER="0.4.0"
+VER="0.5.0"
 JAR="gama.ui.claude_${VER}.jar"
 
 # --- toolchain: prefer GAMA's bundled JDK, else system javac ---
@@ -26,7 +26,7 @@ jar1() { ls "$P"/$1 2>/dev/null | head -1; }
 SWT_FRAG="$(jar1 'org.eclipse.swt.win32.*.jar')"
 [ -z "$SWT_FRAG" ] && SWT_FRAG="$(jar1 'org.eclipse.swt.cocoa.*.jar')"
 [ -z "$SWT_FRAG" ] && SWT_FRAG="$(jar1 'org.eclipse.swt.gtk.*.jar')"
-CP="$(jar1 'org.eclipse.ui_*.jar');$(jar1 'org.eclipse.ui.workbench_*.jar');$(jar1 'org.eclipse.ui.ide_*.jar');$(jar1 'org.eclipse.swt_*.jar');$SWT_FRAG;$(jar1 'org.eclipse.jface_*.jar');$(jar1 'org.eclipse.jface.text_*.jar');$(jar1 'org.eclipse.text_*.jar');$(jar1 'org.eclipse.core.resources_*.jar');$(jar1 'org.eclipse.core.runtime_*.jar');$(jar1 'org.eclipse.equinox.common_*.jar');$(jar1 'org.eclipse.core.jobs_*.jar');$(jar1 'org.eclipse.osgi_*.jar');$(jar1 'org.eclipse.equinox.registry_*.jar');$(jar1 'org.eclipse.core.commands_*.jar')"
+CP="$(jar1 'org.eclipse.ui_*.jar');$(jar1 'org.eclipse.ui.workbench_*.jar');$(jar1 'org.eclipse.ui.ide_*.jar');$(jar1 'org.eclipse.swt_*.jar');$SWT_FRAG;$(jar1 'org.eclipse.jface_*.jar');$(jar1 'org.eclipse.jface.text_*.jar');$(jar1 'org.eclipse.text_*.jar');$(jar1 'org.eclipse.core.resources_*.jar');$(jar1 'org.eclipse.core.runtime_*.jar');$(jar1 'org.eclipse.equinox.common_*.jar');$(jar1 'org.eclipse.core.jobs_*.jar');$(jar1 'org.eclipse.osgi_*.jar');$(jar1 'org.eclipse.equinox.registry_*.jar');$(jar1 'org.eclipse.core.commands_*.jar');$(jar1 'gama.core_*.jar')"
 # on mac/linux javac wants ':' separators
 case "$(uname -s)" in Darwin|Linux) CP="${CP//;/:}";; esac
 

@@ -283,6 +283,12 @@ public class ChatView extends ViewPart {
 				String line;
 				while ((line = out.readLine()) != null) {
 					final String l = line;
+					// M8: lenh sim tu agent -> thuc thi tren GAMA runtime, tra sim_reply,
+					// KHONG day vao chat (day la kenh RPC, khong phai noi dung hoi thoai)
+					if (l.startsWith("{\"type\": \"sim_cmd\"") || l.startsWith("{\"type\":\"sim_cmd\"")) {
+						new Thread(() -> handleSimCmd(l), "claude-sim-cmd").start();
+						continue;
+					}
 					Display.getDefault().asyncExec(() -> pushToChat(l));
 					if (l.contains("\"done\"")) { turnActive = false; refreshWorkspace(); }
 					// M7: sau undo cung refresh de Xtext validate lai noi dung khoi phuc
@@ -334,12 +340,16 @@ public class ChatView extends ViewPart {
 			final var loc = ResourcesPlugin.getWorkspace().getRoot().getLocation();
 			if (loc != null) { root = String.valueOf(loc); }
 		}
+		// M8: co experiment dang mo -> bao agent biet de no dung sim_* tools
+		String sim = null;
+		try { sim = gama.ui.claude.SimBridge.statusBrief(); } catch (final Throwable ignored) {}
 		final String msg = "{\"type\":\"chat\",\"text\":\"" + esc(text) + "\",\"active_file\":"
 				+ (af == null ? "null" : "\"" + esc(af) + "\"")
 				+ ",\"workspace_summary\":\"" + esc(lastSummary) + "\""
 				+ (snap == null ? "" : ",\"snapshot\":\"" + esc(snap) + "\"")
 				+ (root == null ? "" : ",\"project_root\":\"" + esc(root) + "\"")
 				+ (con.isEmpty() ? "" : ",\"console\":\"" + esc(con) + "\"")
+				+ (sim == null ? "" : ",\"sim\":\"" + esc(sim) + "\"")
 				+ ",\"diagnostics\":" + lastDiagArray + "}";
 		sendRaw(msg, true);
 		// M7: trong luot chay, bom console ra file dinh ky de read_ide_console tuoi
@@ -385,8 +395,73 @@ public class ChatView extends ViewPart {
 		}
 	}
 
-	/** Ghi 1 dong JSON sang agent. spawnIfNeeded=false: agent chua chay thi bo qua. */
-	private void sendRaw(final String json, final boolean spawnIfNeeded) {
+	// ------------------------------------------------------ sim bridge (M8)
+
+	/** Thuc thi 1 sim_cmd tu agent (worker thread) va tra sim_reply qua stdin. */
+	private void handleSimCmd(final String json) {
+		final long id = jsonNum(json, "id", -1);
+		final String op = jsonStr(json, "op");
+		final String code = jsonStr(json, "code");
+		final int steps = (int) jsonNum(json, "steps", 1);
+		final String display = jsonStr(json, "display");
+		String result;
+		try {
+			result = gama.ui.claude.SimBridge.handle(op, code, steps, display, this::captureWindowSync);
+		} catch (final Throwable t) {
+			result = "SIM ERROR: " + t;
+		}
+		sendRaw("{\"type\":\"sim_reply\",\"id\":" + id + ",\"text\":\"" + esc(result) + "\"}", false);
+	}
+
+	/** Chup ca cua so GAMA tu worker thread (fallback cho sim_snapshot voi OpenGL). */
+	private String captureWindowSync() {
+		final String[] path = new String[1];
+		try {
+			Display.getDefault().syncExec(() -> path[0] = captureWindow());
+		} catch (final Throwable ignored) {}
+		return path[0];
+	}
+
+	/** Trich "name":"value" tu 1 dong JSON phang (kenh sim_cmd), tu unescape. */
+	private static String jsonStr(final String json, final String name) {
+		final var m = java.util.regex.Pattern
+				.compile("\"" + name + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").matcher(json);
+		return m.find() ? unescapeJson(m.group(1)) : null;
+	}
+
+	private static long jsonNum(final String json, final String name, final long def) {
+		final var m = java.util.regex.Pattern
+				.compile("\"" + name + "\"\\s*:\\s*(-?\\d+)").matcher(json);
+		return m.find() ? Long.parseLong(m.group(1)) : def;
+	}
+
+	private static String unescapeJson(final String s) {
+		final StringBuilder b = new StringBuilder(s.length());
+		for (int i = 0; i < s.length(); i++) {
+			final char c = s.charAt(i);
+			if (c != '\\' || i + 1 >= s.length()) { b.append(c); continue; }
+			final char n = s.charAt(++i);
+			switch (n) {
+				case 'n' -> b.append('\n');
+				case 't' -> b.append('\t');
+				case 'r' -> b.append('\r');
+				case 'b' -> b.append('\b');
+				case 'f' -> b.append('\f');
+				case 'u' -> {
+					if (i + 4 < s.length()) {
+						b.append((char) Integer.parseInt(s.substring(i + 1, i + 5), 16));
+						i += 4;
+					}
+				}
+				default -> b.append(n); // \" \\ \/
+			}
+		}
+		return b.toString();
+	}
+
+	/** Ghi 1 dong JSON sang agent. spawnIfNeeded=false: agent chua chay thi bo qua.
+	 *  synchronized: UI thread (chat/permission) va worker thread (sim_reply) cung ghi. */
+	private synchronized void sendRaw(final String json, final boolean spawnIfNeeded) {
 		try {
 			if (agentProc == null || !agentProc.isAlive()) {
 				if (!spawnIfNeeded) { return; }
@@ -438,24 +513,32 @@ public class ChatView extends ViewPart {
 	/** M4: chup toan bo cua so GAMA ra PNG, dinh kem vao message ke tiep. */
 	private void takeSnapshot() {
 		try {
-			final Shell shell = browser != null ? browser.getShell() : Display.getDefault().getActiveShell();
-			if (shell == null) { return; }
-			final Rectangle b = shell.getBounds();
-			final Image img = new Image(shell.getDisplay(), b.width, b.height);
-			final GC gc = new GC(shell);
-			gc.copyArea(img, 0, 0);
-			gc.dispose();
-			final String path = System.getProperty("java.io.tmpdir") + File.separator
-					+ "gama_claude_snap_" + System.currentTimeMillis() + ".png";
-			final ImageLoader loader = new ImageLoader();
-			loader.data = new ImageData[] { img.getImageData() };
-			loader.save(path, SWT.IMAGE_PNG);
-			img.dispose();
+			final String path = captureWindow();
+			if (path == null) { return; }
 			pendingSnapshot = path;
 			pushToChat("{\"type\":\"info\",\"text\":\"Snapshot captured - it will be attached to your next message.\"}");
 		} catch (final Exception e) {
 			pushToChat("{\"type\":\"error\",\"text\":\"Snapshot failed: " + esc(String.valueOf(e.getMessage())) + "\"}");
 		}
+	}
+
+	/** Chup cua so GAMA ra PNG, tra ve path (UI thread). M8 tach ra de sim_snapshot dung lai. */
+	private String captureWindow() {
+		final Shell shell = browser != null && !browser.isDisposed() ? browser.getShell()
+				: Display.getDefault().getActiveShell();
+		if (shell == null) { return null; }
+		final Rectangle b = shell.getBounds();
+		final Image img = new Image(shell.getDisplay(), b.width, b.height);
+		final GC gc = new GC(shell);
+		gc.copyArea(img, 0, 0);
+		gc.dispose();
+		final String path = System.getProperty("java.io.tmpdir") + File.separator
+				+ "gama_claude_snap_" + System.currentTimeMillis() + ".png";
+		final ImageLoader loader = new ImageLoader();
+		loader.data = new ImageData[] { img.getImageData() };
+		loader.save(path, SWT.IMAGE_PNG);
+		img.dispose();
+		return path;
 	}
 
 	/** M7: hut text console GAMA - duyet cay widget cua cua so, gom cac StyledText
@@ -675,7 +758,22 @@ public class ChatView extends ViewPart {
 	}
 
 	private static String esc(final String s) {
-		return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "").replace("\n", "\\n");
+		// JSON string an toan: escape day du + bo control char la (console/sim
+		// output co the chua tab, v.v. - raw control char lam json.loads phia
+		// Python vo)
+		final StringBuilder b = new StringBuilder(s.length());
+		for (int i = 0; i < s.length(); i++) {
+			final char c = s.charAt(i);
+			switch (c) {
+				case '\\' -> b.append("\\\\");
+				case '"' -> b.append("\\\"");
+				case '\n' -> b.append("\\n");
+				case '\t' -> b.append("\\t");
+				case '\r' -> {}
+				default -> { if (c >= 0x20) { b.append(c); } }
+			}
+		}
+		return b.toString();
 	}
 
 	/** Escape de nhet vao string literal JS trong browser.execute. */
@@ -748,7 +846,7 @@ public class ChatView extends ViewPart {
  #hist:hover{color:var(--tx);border-color:var(--acc)}
  .p .undo{background:transparent;color:#ffd98a;border:1px solid var(--warnb) !important}
 </style></head><body>
-<div id='hd'><div id='dot'></div><b>Claude</b>&nbsp;<span style='color:var(--dim);margin-left:0'>GAMA Copilot</span><span>v0.6</span><button id='hist' title='Edit history - undo applied edits'>&#128336;</button><button id='clr' title='Clear conversation and start a fresh session'>&#128465;</button></div>
+<div id='hd'><div id='dot'></div><b>Claude</b>&nbsp;<span style='color:var(--dim);margin-left:0'>GAMA Copilot</span><span>v0.7</span><button id='hist' title='Edit history - undo applied edits'>&#128336;</button><button id='clr' title='Clear conversation and start a fresh session'>&#128465;</button></div>
 <div id='msgs'></div>
 <div id='bar'><textarea id='in' rows='1' placeholder='Ask about the open GAML model...  (Enter to send / Shift+Enter for a new line)'></textarea><button id='snap' title='Attach a window snapshot to your next message'>&#128247;</button><button id='btn' title='Send'>&#10148;</button><button id='stop' title='Interrupt this turn'>&#9632;</button></div>
 <script>
