@@ -3,9 +3,16 @@ package gama.ui.claude;
 import org.eclipse.core.runtime.IProgressMonitor;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
+import org.eclipse.e4.ui.model.application.ui.MElementContainer;
+import org.eclipse.e4.ui.model.application.ui.MUIElement;
+import org.eclipse.e4.ui.model.application.ui.advanced.MPerspective;
+import org.eclipse.e4.ui.model.application.ui.basic.MPart;
+import org.eclipse.e4.ui.model.application.ui.basic.MWindow;
+import org.eclipse.e4.ui.workbench.modeling.EModelService;
 import org.eclipse.ui.IPerspectiveDescriptor;
 import org.eclipse.ui.IPerspectiveListener;
 import org.eclipse.ui.IStartup;
+import org.eclipse.ui.IViewPart;
 import org.eclipse.ui.IWorkbench;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
@@ -61,7 +68,38 @@ public class OpenViewAtStartup implements IStartup {
 		if (page == null) { return; }
 		try {
 			// VIEW_VISIBLE: hien ra nhung khong lay focus cua display/editor
-			page.showView(VIEW_ID, null, IWorkbenchPage.VIEW_VISIBLE);
+			final IViewPart v = page.showView(VIEW_ID, null, IWorkbenchPage.VIEW_VISIBLE);
+			dockWithConsole(v);
 		} catch (final Exception ignored) {}
+	}
+
+	/** M8.2: mac dinh Eclipse tha view vao vung editor GIUA man hinh - che mat
+	 *  display khi mo phong chay. Keo no ve chung tab stack voi Console cua GAMA
+	 *  (goc duoi trai). E4: view trong perspective la MPlaceholder cung
+	 *  elementId; chuyen placeholder cua minh sang parent stack cua Console
+	 *  (EList.add tu go khoi parent cu). Perspective khong co Console (vd
+	 *  Modeling) thi de nguyen cho mac dinh. */
+	private static void dockWithConsole(final IViewPart v) {
+		try {
+			final MPart myPart = v.getSite().getService(MPart.class);
+			final EModelService ms = v.getSite().getService(EModelService.class);
+			if (myPart == null || ms == null) { return; }
+			final MWindow mwin = ms.getTopLevelWindowFor(myPart);
+			final MPerspective persp = ms.getActivePerspective(mwin);
+			if (persp == null) { return; }
+			final MUIElement mine = ms.find(VIEW_ID, persp);
+			if (mine == null) { return; }
+			MUIElement console = ms.find("gama.ui.application.view.ConsoleView", persp);
+			if (console == null) {
+				console = ms.find("gama.ui.application.view.InteractiveConsoleView", persp);
+			}
+			if (console == null) { return; }
+			final MElementContainer<MUIElement> stack = console.getParent();
+			if (stack == null || mine.getParent() == stack) { return; }
+			stack.getChildren().add(mine);
+			stack.setSelectedElement(mine);
+		} catch (final Throwable ignored) {
+			// khong dock duoc thi view van mo o vi tri mac dinh
+		}
 	}
 }
