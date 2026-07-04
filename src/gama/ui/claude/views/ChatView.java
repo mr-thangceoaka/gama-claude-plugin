@@ -960,14 +960,15 @@ public class ChatView extends ViewPart {
  .th .bd{color:var(--dim)}
  .th .dts:after{content:'';animation:dt 1.4s steps(4) infinite}
  @keyframes dt{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
- #wel{display:flex;flex-direction:column;align-items:center;justify-content:center;
-      height:100%;text-align:center;padding:0 18px;animation:up .3s ease}
+ #wel{display:flex;flex-direction:column;align-items:center;text-align:center;
+      padding:26px 16px 18px;animation:up .3s ease}
  #wel .big{width:46px;height:46px;border-radius:15px;font-size:24px;
       background:linear-gradient(135deg,var(--acc),#c07cf8);display:flex;align-items:center;
       justify-content:center;color:#fff;font-weight:700;box-shadow:0 4px 24px rgba(139,124,248,.35)}
  #wel h1{font-size:16px;margin:12px 0 3px;font-weight:650}
  #wel p{color:var(--dim);font-size:12px;margin:0 0 18px;line-height:1.5}
- #sugg{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;max-width:430px}
+ #sugg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;
+      width:100%;max-width:430px}
  .sg{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
      font-size:12px;color:var(--tx);text-align:left;cursor:pointer;line-height:1.4;
      transition:all .15s;display:flex;gap:8px;align-items:flex-start}
@@ -990,7 +991,7 @@ public class ChatView extends ViewPart {
  #snap{background:var(--panel2);border:1px solid var(--line);color:var(--tx)}
 </style></head><body>
 <div id='hd'><div id='logo'>C</div><b>Claude</b><span class='sub'>GAMA Copilot</span><div id='dot'></div><span id='sim'><i></i><em id='simtx' style='font-style:normal;overflow:hidden;text-overflow:ellipsis'></em></span><div class='btns'><select id='mdl' title='Claude model - switches live, keeps the conversation'>%%MODEL_OPTS%%</select><span class='ver'>v0.9</span><button id='hist' title='Edit history - undo applied edits'>&#128336;</button><button id='clr' title='Clear conversation and start a fresh session'>&#128465;</button></div></div>
-<div id='msgs'><div id='wel'><div class='big'>C</div><h1>Claude in GAMA</h1><p>Your model, your diagnostics, your <b>running simulation</b> - one chat.<br>Pick one to try:</p><div id='sugg'></div></div></div>
+<div id='msgs'></div>
 <div id='bar'><textarea id='in' rows='1' placeholder='Ask about your model or the running simulation...  (Enter to send)'></textarea><button id='snap' title='Attach a window snapshot to your next message'>&#128247;</button><button id='btn' title='Send'>&#10148;</button><button id='stop' title='Interrupt this turn'>&#9632;</button></div>
 <script>
  var msgs=document.getElementById('msgs'),inp=document.getElementById('in'),
@@ -998,17 +999,23 @@ public class ChatView extends ViewPart {
      snap=document.getElementById('snap'),clr=document.getElementById('clr'),
      hist=document.getElementById('hist'),dot=document.getElementById('dot'),
      sim=document.getElementById('sim'),simtx=document.getElementById('simtx'),
-     wel=document.getElementById('wel'),
+     wel=null,
      cur=null,think=null,toolRow=null,permCards={};
  var SUGG=[
   ['\\ud83d\\udd34','Live simulation','What is happening in my running simulation right now?'],
   ['\\ud83e\\ude7a','Fix errors','Fix the compile errors in this project.'],
   ['\\ud83d\\uddfa\\ufe0f','Explain model','Explain the structure of this model: species, experiments, displays.'],
   ['\\u25b6\\ufe0f','Run & verify','Run a short experiment headless and check the behaviour.']];
- var sg=document.getElementById('sugg');
- SUGG.forEach(function(s){var d=document.createElement('div');d.className='sg';
-   d.innerHTML="<span class='ic'>"+s[0]+"</span><span class='tx'><b>"+s[1]+"</b><span>"+s[2]+"</span></span>";
-   d.onclick=function(){inp.value=s[2];send();};sg.appendChild(d);});
+ function buildWel(){
+   if(wel)return;
+   wel=document.createElement('div');wel.id='wel';
+   wel.innerHTML="<div class='big'>C</div><h1>Claude in GAMA</h1><p>Your model, your diagnostics, your <b>running simulation</b> - one chat.<br>Pick one to try:</p><div id='sugg'></div>";
+   msgs.insertBefore(wel,msgs.firstChild);
+   var sg=wel.querySelector('#sugg');
+   SUGG.forEach(function(s){var d=document.createElement('div');d.className='sg';
+     d.innerHTML="<span class='ic'>"+s[0]+"</span><span class='tx'><b>"+s[1]+"</b><span>"+s[2]+"</span></span>";
+     d.onclick=function(){inp.value=s[2];send();};sg.appendChild(d);});}
+ buildWel();
  var TOOLICON={Read:'\\ud83d\\udcd6',Edit:'\\u270f\\ufe0f',Write:'\\ud83d\\udcdd',Grep:'\\ud83d\\udd0e',
    Glob:'\\ud83d\\uddc2\\ufe0f',gaml_outline:'\\ud83e\\udded',find_gaml_symbol:'\\ud83e\\udded',
    project_map:'\\ud83d\\uddfa\\ufe0f',validate_gaml_syntax:'\\ud83e\\uddea',
@@ -1046,7 +1053,8 @@ public class ChatView extends ViewPart {
  btn.onclick=send;
  stop.onclick=function(){if(window.claudeStop)claudeStop();};
  snap.onclick=function(){if(window.claudeSnap)claudeSnap();};
- clr.onclick=function(){msgs.innerHTML='';cur=null;think=null;toolRow=null;permCards={};busy(false);
+ clr.onclick=function(){msgs.innerHTML='';wel=null;cur=null;think=null;toolRow=null;permCards={};
+   busy(false);buildWel();
    if(window.claudeClear)claudeClear();
    addInfo('Conversation cleared - your next message starts a fresh session.');};
  hist.onclick=function(){if(window.claudeHistory)claudeHistory();else addErr('Bridge to Java not ready');};
