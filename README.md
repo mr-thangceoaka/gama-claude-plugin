@@ -1,100 +1,111 @@
 # Claude in GAMA
 
-**A full Claude coding agent that lives inside the [GAMA Platform](https://gama-platform.org/) IDE — and inside your running simulation.**
+**A Claude coding agent that lives inside the [GAMA Platform](https://gama-platform.org/) IDE — and inside your running simulation.**
 
-This is not a chat window bolted onto an editor. The agent sees what the IDE
-sees (compiler errors with exact lines, the structure of every model in your
-project, the console) **and what the simulation sees**: while your experiment
-is running it can read agent state, change parameters, create or kill agents,
-step the scheduler cycle by cycle, and *look at* the displays — the same live
-world you are watching.
+I got tired of copy-pasting GAML errors into a chatbot that has never seen my
+project. So I put the agent *inside* GAMA. It sees what the IDE sees: the
+compiler errors with exact lines, every model in the workspace, the console.
+And it sees what the **simulation** sees: while your experiment is running it
+can pause it, read agent state, change the world, step cycle by cycle, and
+literally *look at* the displays you are looking at.
 
-> ⚠️ If you tried an early version: this is a different tool now. The first
-> release was "chat + error markers". The current release is a project-aware
-> agent with semantic navigation, a run-and-verify loop, undo-able edits, and
-> a live bridge into the running simulation. Full history in the
-> [changelog](#changelog) below.
+Here is the moment that sold me on my own tool. My pedestrian simulation was
+running. I typed one message — *"give each person a circle showing their body
+temperature, darker when people are close together, and add a graph of the
+highest temperature"* — and after a reload this is what I got:
 
-![Fix session inside GAMA](docs/screenshot-fix-session.png)
+![Agent added body-temperature circles and a new chart, from one chat message](docs/live-feature-applied.png)
+
+New attribute, new reflex, new aspect, a whole new chart display. I never
+opened the editor.
+
+## What it can do
+
+### Fix the errors in your project
+
+Open a broken project and the chat already knows. The plugin feeds GAMA's own
+Xtext diagnostics to the agent — exact files, exact lines, no copy-pasting.
+The welcome screen gives you one-click starters:
+
+![Welcome screen with a broken project — errors banner on top, suggestion cards in the chat](docs/welcome-fix-errors.png)
+
+I clicked **Fix errors** on a project where the banner said *"Impossible to
+run any experiment"*. It read the files, made the edits (every one shows a
+real diff you approve), validated the model headlessly, and the run button
+came back green:
+
+![Fix session — edit chips, headless validation, experiment runnable again](docs/fix-session.png)
+
+### Change your model while the simulation runs
+
+This is the part no generic AI IDE can do. The chat is docked right next to
+the Console in the simulation perspective, and every message you send carries
+a live status line — current cycle, parameters, monitors — so the agent always
+knows a sim is up:
+
+![Chat docked into GAMA's console stack while the experiment runs](docs/sim-perspective-dock.png)
+
+So you just... ask for things. Here I asked for the body-temperature feature
+while the sim was at cycle 7959:
+
+![Asking for a new feature in plain English while the simulation is running](docs/live-request.png)
+
+It edited the model, told me a reload was needed (a running sim keeps its old
+code — that's GAMA, not the plugin), and one reload later I had the circles
+and the chart you saw at the top.
+
+### It can look at your displays
+
+`sim_snapshot` captures each display of the running experiment to PNG and the
+agent *reads the image*. Here I switched the model picker to Haiku (fastest)
+and asked it to look at the graph:
+
+![Agent snapshots the running displays to see them](docs/sim-snapshot.png)
+
+And it answers from what it actually sees — the max/mean temperature lines,
+the oscillation, the spread:
+
+![Agent analyzes the chart it captured from the live simulation](docs/graph-analysis.png)
+
+### The full toolbox
+
+- **Live simulation bridge** — `sim_status` (cycle, parameters, monitors,
+  displays), `sim_eval` (run *any* GAML against the live world, expressions
+  **and** statements: `ask people { ... }`, `create predator number: 5;` —
+  displays refresh instantly), `sim_control` (pause / resume / step / step
+  back / reload), `sim_snapshot` (per-display PNG the agent can read).
+- **Project intelligence** — every `.gaml` is parsed into a cached semantic
+  index; each message carries a compact project map (files, species,
+  experiments, displays, with line numbers). `gaml_outline` and
+  `find_gaml_symbol` navigate without reading whole files.
+- **Run-and-verify loop** — `validate_gaml_syntax` compile-checks headlessly,
+  `run_experiment_headless` runs any experiment with a step cap and returns
+  monitor values per step plus display snapshots, `read_ide_console` tails
+  the IDE console. The agent doesn't guess whether its fix works — it runs it.
+- **Safe edits, by construction** — guardrails live in code, not prompts.
+  Read/edit is hard-limited to your project folder. No shell access, ever.
+  Every edit shows a diff card, every applied edit is snapshotted and
+  undo-able from the History panel.
+- **IDE conveniences** — model picker in the header (Opus for the hard stuff,
+  Haiku when you want speed), window snapshot button, "Ask Claude" on any
+  error line (right-click or Ctrl+Alt+C), context-folder override, one-click
+  fresh session.
 
 ## Why not just use Cursor?
 
-GAMA is a *simulation* platform. The work loop is not
-`write code -> compile -> ship`; it is
-`write model -> compile -> run -> watch emergent behaviour -> adjust`.
-A generic AI IDE stops at the file level: it can never tell you *why the
-epidemic dies out at cycle 300*, because it can't see cycle 300.
-
-This plugin closes the whole loop, inside GAMA:
+GAMA is a *simulation* platform. The loop is not `write → compile → ship`, it
+is `write → compile → run → watch what emerges → adjust`. A generic AI IDE
+stops at the file level. It can never tell you why the epidemic dies out at
+cycle 300, because it can't see cycle 300.
 
 | A generic AI IDE | Claude in GAMA |
 |---|---|
-| Sees files | Sees files **+ live Xtext diagnostics + project semantic index** |
-| Greps for symbols | `find_gaml_symbol` over a cached index of every species/action/reflex/experiment |
-| Runs shell commands | **No shell.** Purpose-built tools: compile-check, headless runs, live-sim bridge |
-| Can't run your GUI model | Runs *any* experiment headless, reads monitors per step, **reads the display PNGs** |
-| Can't touch a running program | **Pauses, steps, inspects, and mutates the live simulation, and screenshots its displays** |
-| Free-form edits | Every edit shows a real diff card; every applied edit is snapshotted and undo-able |
-
-## What it does
-
-### 🔴 Live simulation copilot (v0.5)
-Launch any experiment and just talk about it. While it runs, the agent can:
-
-- **`sim_status`** — cycle, paused/running, every parameter value, every
-  monitor value, list of displays. A one-line live status is also attached to
-  each message you send, so the agent always knows a sim is up.
-- **`sim_eval`** — evaluate *any* GAML against the live world, through the
-  same engine as GAMA's Interactive Console. Expressions read state
-  (`length(prey)`, `prey mean_of each.energy`); statements **change** it
-  (`ask prey { energy <- 1.0; }`, `create predator number: 5;`) and the
-  displays refresh instantly.
-- **`sim_control`** — pause, resume, step N cycles, step back, reload.
-- **`sim_snapshot`** — capture each display of the running experiment to PNG
-  and *read the image*, seeing exactly what you see.
-
-So you can ask things like:
-
-> *"Why did all the predators die around cycle 200? Pause it and check."*
-> *"Drop infection_rate to 0.1 and step 50 cycles — does the curve flatten?"*
-> *"Look at the map display. Why are agents clustering bottom-left?"*
-
-### 🧭 Project intelligence
-- Every `.gaml` in the project is parsed into a **semantic index** (cached by
-  mtime). Each message carries a compact **project map**: files, species,
-  experiments, displays — with line numbers.
-- `gaml_outline` returns one file's structure far cheaper than reading it;
-  `find_gaml_symbol` finds definitions and reference counts across files.
-
-### 🩺 Live diagnostics
-Every save triggers GAMA's own Xtext validation; the plugin turns the markers
-into JSON and attaches the active project's errors to your next message.
-Exact files, exact lines, zero copy-pasting. "Ask Claude" on any error line
-(right-click, toolbar, or Ctrl+Alt+C).
-
-### ▶️ Run-and-verify loop
-The agent doesn't guess whether its fix works:
-- `validate_gaml_syntax` compile-checks a model headlessly.
-- `run_experiment_headless` runs **any** experiment (gui or batch) with a step
-  cap, returns recorded monitor values per step **plus display snapshot PNGs
-  it can look at**.
-- `read_ide_console` tails the IDE console (refreshed live during a turn).
-
-Edit → validate → run small → look at outputs → fix → repeat. Cursor-style,
-but the "test" is a simulation.
-
-### 🛡️ Safe edits, by construction
-- Guardrails live in **code, not prompts**: read/edit hard-limited to the
-  project of the open model (or a folder you pick). No shell access, ever.
-- Every proposed edit shows an approval card with a real unified diff
-  (`auto_approve=true` to skip).
-- Every applied edit is snapshotted first: **Undo** on the card, **History**
-  in the header with per-entry undo. The IDE re-validates after each undo.
-
-### 🧰 IDE conveniences
-Window snapshot button (attach a screenshot of GAMA to your message), new
-projects auto-imported into the navigator, context-folder override, one-click
-fresh session, markdown chat with tool chips.
+| Sees files | Sees files + live Xtext diagnostics + a semantic index of the workspace |
+| Greps for symbols | `find_gaml_symbol` over every species/action/reflex/experiment |
+| Runs shell commands | No shell. Purpose-built tools: compile-check, headless runs, live-sim bridge |
+| Can't run your GUI model | Runs any experiment headless, reads monitors per step, reads the display PNGs |
+| Can't touch a running program | Pauses, steps, inspects and **mutates** the live simulation, and screenshots its displays |
+| Free-form edits | Real diff cards, snapshot before every edit, per-entry undo |
 
 ## Architecture
 
@@ -103,23 +114,21 @@ GAMA (Eclipse RCP + Xtext)
 └─ gama.ui.claude (this plugin, Java)
    ├─ ChatView       SWT Browser chat UI + JSON-lines stdio to the agent
    ├─ MarkerBridge   IMarker -> JSON, auto-rescan on save/tab-switch
-   ├─ ConsoleBridge  read-only console mirror, refreshed every 2s in a turn
+   ├─ ConsoleBridge  read-only console mirror, refreshed during a turn
    ├─ SimBridge      live bridge into the RUNNING experiment (gama.core):
    │                   status / pause / resume / step / reload,
    │                   GAML eval (Interactive-Console engine, statements too),
    │                   per-display PNG capture
    └─ AgentHost      spawns agent/ide_agent.py
         └─ Claude Agent SDK -> Claude API
-           ├─ gaml-tools   gaml_outline / find_gaml_symbol / project_map
-           │                 (mtime-cached workspace index)
-           ├─ gama-tools   validate / run headless (any experiment) /
-           │                 read outputs + snapshots / read IDE console
+           ├─ gaml-tools   outline / find symbol / project map (cached index)
+           ├─ gama-tools   validate / run headless / read outputs / console
            ├─ gama-sim     sim_status / sim_eval / sim_control / sim_snapshot
            │                 (RPC over stdio -> SimBridge in the IDE process)
            └─ edit_history pre-edit snapshots, diff cards, undo journal
 ```
 
-The sim tools are an RPC channel: the Python agent emits
+The sim tools are a tiny RPC channel: the Python agent emits
 `{"type":"sim_cmd",...}`, the Java plugin executes it on the GAMA runtime and
 answers with `sim_reply`. Same trusted process, no extra ports, no server.
 
@@ -148,7 +157,7 @@ pip install claude-agent-sdk
 
 Auth: `oauth_token=` (from `claude setup-token`, uses your Claude
 subscription) or `key=` (API credits). The agent runs with an isolated
-`CLAUDE_CONFIG_DIR`, so proxies/model overrides in your own
+`CLAUDE_CONFIG_DIR`, so proxies or model overrides in your own
 `~/.claude/settings.json` cannot hijack it.
 
 Uninstall: delete the `gama.ui.claude,...` line from
@@ -159,43 +168,48 @@ first install).
 ## Why not headless-only?
 
 GAMA's `gama-headless -validate` doesn't check *your* file (built-in library
-only); `-xml` does but costs a full JVM start per check and reports no line
-numbers. The IDE's Xtext markers are instant and exact — the plugin hands them
-over. Same story at runtime: headless re-runs are great for reproducible
-verification (the agent uses them), but only the live bridge lets you ask
-about *the* simulation you're watching, with its exact random seed and
-history.
+only); `-xml` does, but costs a full JVM start per check and reports no line
+numbers. The IDE's Xtext markers are instant and exact — the plugin just hands
+them over. Same story at runtime: headless re-runs are great for reproducible
+checks (the agent uses them), but only the live bridge lets you ask about
+*the* simulation you are watching, with its exact seed and history.
 
-## Changelog
+## Version history
 
-<details>
-<summary>Milestones M0 → M8 (v0.5.0)</summary>
+The project grew in milestones, each one tested for real inside the GUI.
+What changed from version to version:
 
-- **M0–M2** view + marker scan; live diagnostics JSON with library-noise
-  filter; chat wired to the agent; auto refresh + revalidate after edits;
-  diagnostics scoped to the active project.
-- **M3/M3.5** "Ask Claude" on error lines; approval cards with diff preview;
-  Stop button; auto-refresh diagnostics; editor context menu + Ctrl+Alt+C;
-  chat UI overhaul (markdown, tool chips, typing indicator).
-- **M4** window snapshots the agent can Read to see displays and charts.
-- **M5 (v0.2.0)** project-wide context: project_root scope, Glob/Grep-first
-  prompting, "Context folder" override, Clear-conversation, installer removes
-  stale plugin versions.
-- **M6 (v0.3.0)** agent-driven verify loop: headless validate/run tools,
-  auto-import of new projects into the navigator, workspace-root fallback so
-  "create a new project" works from an empty chat.
-- **M7 (v0.4.0)** the grand overhaul: workspace semantic index + project map
-  on every message; `gaml_outline` / `find_gaml_symbol`; console mirror +
-  `read_ide_console`; `run_experiment_headless` for *any* experiment with
-  monitors-per-step + snapshot PNGs; unified-diff approval cards; edit
-  history with per-entry Undo. Read-scope enforced via PreToolUse hooks.
-- **M8 (v0.5.0)** live simulation bridge: `sim_status` / `sim_eval`
-  (expressions *and* world-mutating statements, Interactive-Console engine) /
-  `sim_control` (pause/resume/step/reload) / `sim_snapshot` (per-display PNG);
-  live sim status attached to every message; hardened JSON escaping on the
-  stdio protocol.
+**v0.1.0 (M0–M4)** — the starting point. A Claude Chat view inside GAMA,
+GAMA's error markers converted to JSON and attached to your messages, "Ask
+Claude" on any error line, edit approval cards with a diff preview, a Stop
+button, and a window-snapshot button so the agent could see the IDE.
 
-</details>
+**v0.2.0 (M5)** — from single-file to project-wide. The agent got the whole
+project as context, a "Context folder" override to point it anywhere, a
+clear-conversation button, and the installer learned to remove stale plugin
+versions.
+
+**v0.3.0 (M6)** — the verify loop. Headless validate and run tools, so the
+agent could check its own fixes instead of guessing. New projects created by
+the agent are auto-imported into the navigator.
+
+**v0.4.0 (M7)** — the big overhaul. Workspace semantic index with a project
+map on every message, `gaml_outline` / `find_gaml_symbol`, an IDE console
+mirror, `run_experiment_headless` for *any* experiment with monitors per step
+plus snapshot PNGs, unified-diff approval cards, and a full edit history with
+per-entry Undo. Read scope enforced in code via hooks, not prompts.
+
+**v0.5.0 (M8)** — the live simulation bridge, the feature this whole project
+was heading toward. `sim_status`, `sim_eval` (expressions and world-mutating
+statements, same engine as GAMA's Interactive Console), `sim_control`
+(pause/resume/step/reload), `sim_snapshot` (per-display PNG). Live sim status
+attached to every message.
+
+**v0.5.1–v0.5.5 (M8.1–M9.1)** — making it feel native. The chat survives
+perspective switches, docks into the console stack of the simulation
+perspective, got a UI overhaul with a live-sim badge in the header, a model
+picker (Opus / Sonnet / Haiku), and a welcome screen with one-click starter
+prompts.
 
 ## License
 
