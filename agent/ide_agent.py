@@ -8,6 +8,7 @@ vao  (stdin) : {"type":"chat","text","active_file","project_root","console",
                {"type":"undo","seq":N}        <- M7: hoan tac 1 edit da apply
                {"type":"history"}             <- M7: xin danh sach edit
                {"type":"sim_reply","id":N,"text"}  <- M8: IDE tra ket qua 1 sim_cmd
+               {"type":"set_model","model":"..."}  <- M9: doi model giua phien
 ra   (stdout): {"type":"text"|"tool"|"done"|"error"|"info"}
                {"type":"permission","id":N,"file","tool","diff"}  <- the duyet Edit
                {"type":"applied","id":N,"seq":M,"file"}           <- edit da ap dung
@@ -380,6 +381,16 @@ async def main():
                 elif t == "sim_reply":
                     # M8: ket qua 1 lenh sim tu plugin -> danh thuc tool dang doi
                     sim_tools.resolve(msg)
+                elif t == "set_model":
+                    # M9: doi model GIUA phien, giu nguyen hoi thoai (SDK >= 0.2.x)
+                    m_name = str(msg.get("model") or "").strip()
+                    if m_name:
+                        try:
+                            await client.set_model(m_name)
+                            emit({"type": "info",
+                                  "text": f"Model switched to {m_name} - takes effect from the next turn."})
+                        except Exception as e:
+                            emit({"type": "error", "text": f"Could not switch model: {e}"})
                 elif t == "permission_reply":
                     fut = PENDING.get(msg.get("id"))
                     if fut and not fut.done():

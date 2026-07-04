@@ -114,7 +114,7 @@ public class ChatView extends ViewPart {
 			}
 		}
 		if (browser != null) {
-			browser.setText(chatHtml());
+			browser.setText(chatHtml().replace("%%MODEL_OPTS%%", modelOptionsHtml()));
 			// JS goi: claudeSend("noi dung user go")
 			new BrowserFunction(browser, "claudeSend") {
 				@Override
@@ -175,6 +175,16 @@ public class ChatView extends ViewPart {
 				@Override
 				public Object function(final Object[] args) {
 					sendRaw("{\"type\":\"history\"}", false);
+					return null;
+				}
+			};
+			// JS goi: claudeModel(id) -> M9: doi model (song giua phien + luu config)
+			new BrowserFunction(browser, "claudeModel") {
+				@Override
+				public Object function(final Object[] args) {
+					if (args != null && args.length > 0 && args[0] instanceof String m && !m.isBlank()) {
+						switchModel(m.trim());
+					}
 					return null;
 				}
 			};
@@ -410,6 +420,74 @@ public class ChatView extends ViewPart {
 			customRoot = dir;
 			pushToChat("{\"type\":\"info\",\"text\":\"Context folder set to: " + esc(dir)
 					+ " - Claude reads and edits inside this folder from the next message.\"}");
+		}
+	}
+
+	// ------------------------------------------------------ model picker (M9)
+
+	/** Cac model cho dropdown: id -> nhan hien thi. */
+	private static final String[][] MODELS = {
+			{ "claude-opus-4-8", "Opus 4.8 · smartest" },
+			{ "claude-fable-5", "Fable 5 · frontier" },
+			{ "claude-sonnet-5", "Sonnet 5 · balanced" },
+			{ "claude-haiku-4-5-20251001", "Haiku 4.5 · fastest" } };
+
+	private static String cfgModel() {
+		try {
+			final Path cfg = Paths.get(System.getProperty("user.home"), ".gama-claude.properties");
+			if (Files.exists(cfg)) {
+				final Properties p = new Properties();
+				try (var r = Files.newBufferedReader(cfg, StandardCharsets.UTF_8)) { p.load(r); }
+				final String m = p.getProperty("model", "").trim();
+				if (!m.isEmpty()) { return m; }
+			}
+		} catch (final Exception ignored) {}
+		return "claude-opus-4-8"; // trung voi default cua ide_agent
+	}
+
+	private static String modelOptionsHtml() {
+		final String cur = cfgModel();
+		final StringBuilder b = new StringBuilder();
+		boolean known = false;
+		for (final String[] m : MODELS) {
+			final boolean sel = m[0].equals(cur);
+			known |= sel;
+			b.append("<option value='").append(m[0]).append("'").append(sel ? " selected" : "")
+			 .append(">").append(m[1]).append("</option>");
+		}
+		if (!known) { // model= tuy chinh trong properties -> van hien dung no
+			b.insert(0, "<option value='" + esc(cur) + "' selected>" + esc(cur) + "</option>");
+		}
+		return b.toString();
+	}
+
+	/** M9: doi model - bao agent doi ngay giua phien (giu hoi thoai) + ghi vao
+	 *  ~/.gama-claude.properties de lan spawn sau (Clear / mo lai GAMA) van nho. */
+	private void switchModel(final String model) {
+		try {
+			final Path cfg = Paths.get(System.getProperty("user.home"), ".gama-claude.properties");
+			final List<String> lines = Files.exists(cfg)
+					? new ArrayList<>(Files.readAllLines(cfg, StandardCharsets.UTF_8))
+					: new ArrayList<>();
+			boolean replaced = false;
+			for (int i = 0; i < lines.size(); i++) {
+				if (lines.get(i).trim().startsWith("model=")) {
+					lines.set(i, "model=" + model);
+					replaced = true;
+					break;
+				}
+			}
+			if (!replaced) { lines.add("model=" + model); }
+			Files.write(cfg, lines, StandardCharsets.UTF_8);
+		} catch (final IOException e) {
+			pushToChat("{\"type\":\"error\",\"text\":\"Could not save model to config: "
+					+ esc(String.valueOf(e.getMessage())) + "\"}");
+		}
+		if (agentProc != null && agentProc.isAlive()) {
+			sendRaw("{\"type\":\"set_model\",\"model\":\"" + esc(model) + "\"}", false);
+		} else {
+			pushToChat("{\"type\":\"info\",\"text\":\"Model set to " + esc(model)
+					+ " - it will be used when the agent starts.\"}");
 		}
 	}
 
@@ -831,6 +909,11 @@ public class ChatView extends ViewPart {
  #hd .btns{margin-left:auto;display:flex;gap:6px;align-items:center}
  #sim[style*='flex']~.btns{margin-left:8px}
  #hd .ver{color:#55556e;font-size:10.5px;margin-right:2px}
+ #mdl{background:var(--panel2);border:1px solid var(--line);color:var(--dim);border-radius:8px;
+      padding:3px 5px;font-size:11px;outline:none;cursor:pointer;max-width:128px;
+      font-family:inherit;transition:all .15s}
+ #mdl:hover,#mdl:focus{color:var(--tx);border-color:var(--acc)}
+ #mdl option{background:var(--panel2);color:var(--tx)}
  #clr,#hist{background:transparent;border:1px solid var(--line);color:var(--dim);border-radius:8px;
       cursor:pointer;padding:3px 9px;font-size:13px;transition:all .15s}
  #clr:hover{color:#ff9c9c;border-color:#5c2e2e}
@@ -906,7 +989,7 @@ public class ChatView extends ViewPart {
  #stop{background:var(--bad);color:#fff;display:none}
  #snap{background:var(--panel2);border:1px solid var(--line);color:var(--tx)}
 </style></head><body>
-<div id='hd'><div id='logo'>C</div><b>Claude</b><span class='sub'>GAMA Copilot</span><div id='dot'></div><span id='sim'><i></i><em id='simtx' style='font-style:normal;overflow:hidden;text-overflow:ellipsis'></em></span><div class='btns'><span class='ver'>v0.8</span><button id='hist' title='Edit history - undo applied edits'>&#128336;</button><button id='clr' title='Clear conversation and start a fresh session'>&#128465;</button></div></div>
+<div id='hd'><div id='logo'>C</div><b>Claude</b><span class='sub'>GAMA Copilot</span><div id='dot'></div><span id='sim'><i></i><em id='simtx' style='font-style:normal;overflow:hidden;text-overflow:ellipsis'></em></span><div class='btns'><select id='mdl' title='Claude model - switches live, keeps the conversation'>%%MODEL_OPTS%%</select><span class='ver'>v0.9</span><button id='hist' title='Edit history - undo applied edits'>&#128336;</button><button id='clr' title='Clear conversation and start a fresh session'>&#128465;</button></div></div>
 <div id='msgs'><div id='wel'><div class='big'>C</div><h1>Claude in GAMA</h1><p>Your model, your diagnostics, your <b>running simulation</b> - one chat.<br>Pick one to try:</p><div id='sugg'></div></div></div>
 <div id='bar'><textarea id='in' rows='1' placeholder='Ask about your model or the running simulation...  (Enter to send)'></textarea><button id='snap' title='Attach a window snapshot to your next message'>&#128247;</button><button id='btn' title='Send'>&#10148;</button><button id='stop' title='Interrupt this turn'>&#9632;</button></div>
 <script>
@@ -967,6 +1050,8 @@ public class ChatView extends ViewPart {
    if(window.claudeClear)claudeClear();
    addInfo('Conversation cleared - your next message starts a fresh session.');};
  hist.onclick=function(){if(window.claudeHistory)claudeHistory();else addErr('Bridge to Java not ready');};
+ var mdl=document.getElementById('mdl');
+ mdl.onchange=function(){if(window.claudeModel)claudeModel(mdl.value);else addErr('Bridge to Java not ready');};
  function autoh(){inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,110)+'px';}
  inp.addEventListener('input',autoh);
  inp.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});

@@ -13,7 +13,7 @@ if [ -z "$GAMA_DIR" ]; then
 fi
 G="${GAMA_DIR:?Set GAMA_DIR to your GAMA install folder (the one containing plugins/)}"
 P="$G/plugins"
-VER="0.5.3"
+VER="0.5.4"
 JAR="gama.ui.claude_${VER}.jar"
 
 # --- toolchain: prefer GAMA's bundled JDK, else system javac ---
