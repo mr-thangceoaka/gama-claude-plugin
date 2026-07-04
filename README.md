@@ -2,8 +2,12 @@
 
 **A Claude coding agent that lives inside the [GAMA Platform](https://gama-platform.org/) IDE — and inside your running simulation.**
 
-I got tired of copy-pasting GAML errors into a chatbot that has never seen my
-project. So I put the agent *inside* GAMA. It sees what the IDE sees: the
+Most GAMA users are not programmers. They are ecologists, urban planners,
+epidemiologists, geographers, students — people who came for the
+*simulation*, and GAML is just the price of admission. I kept watching
+newcomers hit their first compiler error and do the only thing they could:
+copy-paste it into a chatbot that has never seen their project and barely
+knows GAML. So I put the agent *inside* GAMA. It sees what the IDE sees: the
 compiler errors with exact lines, every model in the workspace, the console.
 And it sees what the **simulation** sees: while your experiment is running it
 can pause it, read agent state, change the world, step cycle by cycle, and
@@ -35,6 +39,17 @@ real diff you approve), validated the model headlessly, and the run button
 came back green:
 
 ![Fix session — edit chips, headless validation, experiment runnable again](docs/fix-session.png)
+
+### Start a brand-new project from one message
+
+There doesn't have to be a project yet. Describe what you want and the agent
+builds the whole thing — project folder, model file, species, reflexes,
+experiment, displays — and auto-imports it into the navigator, ready to run.
+My caro (gomoku) game and my chess game each started life as a single chat
+message. And if you ask it to, it proves the model works before handing it
+over: it runs the experiment headless in the background, reads the monitor
+values step by step and the display snapshots, and only then tells you it's
+done.
 
 ### Change your model while the simulation runs
 
@@ -96,7 +111,10 @@ the oscillation, the spread:
 GAMA is a *simulation* platform. The loop is not `write → compile → ship`, it
 is `write → compile → run → watch what emerges → adjust`. A generic AI IDE
 stops at the file level. It can never tell you why the epidemic dies out at
-cycle 300, because it can't see cycle 300.
+cycle 300, because it can't see cycle 300. And the people who model in GAMA
+are mostly scientists, not developers — asking them to move their work into a
+programmer's editor to get AI help is exactly backwards. The help should come
+to where they already are.
 
 | A generic AI IDE | Claude in GAMA |
 |---|---|
