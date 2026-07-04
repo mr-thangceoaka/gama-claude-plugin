@@ -1,6 +1,11 @@
 # Claude in GAMA
 
-**A Claude coding agent that lives inside the [GAMA Platform](https://gama-platform.org/) IDE — and inside your running simulation.**
+**An AI agent — not another chatbot — living inside the [GAMA Platform](https://gama-platform.org/) IDE and inside your running simulation.**
+
+A chatbot answers questions about code it has never seen. An agent acts: this
+one reads your compiler errors, edits your files (with your approval), runs
+your experiments to check its own work, and reaches into the live simulation
+while it runs.
 
 Most GAMA users are not programmers. They are ecologists, urban planners,
 epidemiologists, geographers, students — people who came for the
