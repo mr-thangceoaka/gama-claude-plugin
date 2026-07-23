@@ -37,6 +37,20 @@ sys.stderr.reconfigure(encoding="utf-8")
 _cfg = os.path.join(os.path.expanduser("~"), ".gama-claude-config")
 os.makedirs(_cfg, exist_ok=True)
 os.environ["CLAUDE_CONFIG_DIR"] = _cfg
+# Optional local/OpenAI-compat backend (e.g. Ollama via an Anthropic<->OpenAI
+# proxy). Read base_url from ~/.gama-claude.properties so it survives a plugin
+# rebuild; empty/missing -> falls through to the official Anthropic endpoint.
+if not os.environ.get("ANTHROPIC_BASE_URL"):
+    try:
+        _props = os.path.join(os.path.expanduser("~"), ".gama-claude.properties")
+        with open(_props, encoding="utf-8") as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line.startswith("base_url=") and _line.split("=", 1)[1].strip():
+                    os.environ["ANTHROPIC_BASE_URL"] = _line.split("=", 1)[1].strip()
+                    break
+    except OSError:
+        pass
 if not os.environ.get("ANTHROPIC_BASE_URL"):
     os.environ["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
 for _k in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",

@@ -15,7 +15,11 @@ oauth_token=
 # Option B: pay-per-use API key from console.anthropic.com (needs credits).
 key=
 
-# Optional, default https://api.anthropic.com
+# Optional, default https://api.anthropic.com.
+# To use a local/free model (e.g. Ollama) point this at an Anthropic<->OpenAI
+# proxy such as claude-code-router (http://127.0.0.1:3456). Then set key= to any
+# non-empty dummy value, leave oauth_token= blank, and set model= to the local
+# model name (e.g. qwen2.5-coder:7b). Small models are weak at the tool loop.
 # base_url=
 
 # Optional. false (default) = every Edit shows an approval card with a diff in
