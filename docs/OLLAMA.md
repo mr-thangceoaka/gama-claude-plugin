@@ -1,22 +1,24 @@
-# Chạy plugin với model local (Ollama) — hướng dẫn chi tiết
+# Running the plugin with a local model (Ollama) — detailed guide
 
-> Nhánh này chỉ dành cho ai muốn dùng **model free chạy trên máy** (Ollama)
-> thay cho Claude subscription. Nếu bạn dùng Claude bình thường thì **bỏ qua**
-> — cứ theo `README.md` ở nhánh `main`.
+> This branch is only for people who want to use a **free model running on their
+> own machine** (Ollama) instead of a Claude subscription. If you use Claude
+> normally, **skip this** — just follow `README.md` on the `main` branch.
 
-Đọc kỹ phần **"Nó chạy được tới đâu"** ở cuối trước khi kỳ vọng nhiều.
+Read the **"How far it actually goes"** section at the end before expecting too much.
 
 ---
 
-## 0. Vì sao phải cài thêm proxy, không cắm thẳng Ollama được?
+## 0. Why you need a proxy — you can't plug Ollama in directly
 
-Agent của plugin thực chất là **Claude Code CLI** (qua `claude-agent-sdk`). CLI này
-chỉ biết nói chuyện bằng **Anthropic Messages API** (`/v1/messages`).
+The plugin's agent is really the **Claude Code CLI** (via `claude-agent-sdk`).
+That CLI only speaks the **Anthropic Messages API** (`/v1/messages`).
 
-Ollama lại phơi ra **OpenAI-compatible API** (`/v1/chat/completions`) — khác định
-dạng, nhất là phần gọi tool (tool-use). Nên ở giữa cần một **proxy dịch**
-Anthropic ⇄ OpenAI. Ở đây ta dùng [`claude-code-router`](https://github.com/musistudio/claude-code-router)
-vì nó sinh ra đúng cho việc này.
+Ollama, on the other hand, exposes an **OpenAI-compatible API**
+(`/v1/chat/completions`) — a different format, especially for tool calls
+(tool-use). So you need a **translation proxy** in the middle to convert
+Anthropic ⇄ OpenAI. Here we use
+[`claude-code-router`](https://github.com/musistudio/claude-code-router)
+because it is built exactly for this.
 
 ```
 GAMA plugin ──> ide_agent.py ──> Claude Code CLI
@@ -28,23 +30,26 @@ GAMA plugin ──> ide_agent.py ──> Claude Code CLI
                                Ollama (127.0.0.1:11434)
                                      │
                                      ▼
-                          model local: qwen2.5-coder:7b
+                          local model: qwen2.5-coder:7b
 ```
 
 ---
 
-## 1. Cài Ollama và kéo model
+## 1. Install Ollama and pull a model
 
-1. Tải Ollama: <https://ollama.com/download> → cài như phần mềm bình thường.
-2. Mở terminal, kéo một model **giỏi gọi tool** (bắt buộc, không lấy model chat thường):
+1. Download Ollama: <https://ollama.com/download> → install it like any app.
+2. Open a terminal and pull a model that is **good at tool-calling** (required —
+   do not grab a plain chat model):
 
    ```bash
    ollama pull qwen2.5-coder:7b
    ```
 
-   - Máy yếu / ít VRAM: cứ `7b`.
-   - Máy khỏe (≥16GB VRAM): `qwen2.5-coder:14b` hoặc `:32b` sẽ gọi tool đỡ sai hơn.
-3. Kiểm tra Ollama đang chạy (mặc định nó tự chạy nền ở cổng `11434`):
+   - Weak machine / little VRAM: stick with `7b`.
+   - Strong machine (≥16GB VRAM): `qwen2.5-coder:14b` or `:32b` will make fewer
+     tool-calling mistakes.
+3. Check that Ollama is running (by default it runs in the background on port
+   `11434`):
 
    ```bash
    ollama list
@@ -52,16 +57,16 @@ GAMA plugin ──> ide_agent.py ──> Claude Code CLI
 
 ---
 
-## 2. Cài claude-code-router (proxy)
+## 2. Install claude-code-router (the proxy)
 
-Cần **Node.js** (tải ở <https://nodejs.org>, bản LTS). Rồi:
+You need **Node.js** (get the LTS build at <https://nodejs.org>). Then:
 
 ```bash
 npm install -g @musistudio/claude-code-router
 ```
 
-Tạo file cấu hình `~/.claude-code-router/config.json`
-(trên Windows là `C:\Users\<tên>\.claude-code-router\config.json`):
+Create the config file `~/.claude-code-router/config.json`
+(on Windows: `C:\Users\<name>\.claude-code-router\config.json`):
 
 ```json
 {
@@ -79,82 +84,84 @@ Tạo file cấu hình `~/.claude-code-router/config.json`
 }
 ```
 
-Chạy proxy (để cửa sổ terminal này mở suốt lúc dùng plugin):
+Start the proxy (keep this terminal window open the whole time you use the plugin):
 
 ```bash
 ccr start
 ```
 
-Mặc định nó lắng nghe ở `http://127.0.0.1:3456`. Nếu cổng khác, đọc log lúc
-`ccr start` in ra và sửa `base_url` ở bước 3 cho khớp.
+By default it listens on `http://127.0.0.1:3456`. If it uses a different port,
+read the log printed by `ccr start` and adjust `base_url` in step 3 to match.
 
 ---
 
-## 3. Trỏ plugin vào proxy
+## 3. Point the plugin at the proxy
 
-Sửa file `~/.gama-claude.properties` (chỗ đang cấu hình plugin). Bốn dòng quan
-trọng:
+Edit `~/.gama-claude.properties` (the file that configures the plugin). The four
+lines that matter:
 
 ```properties
-# Model local — đúng tên đã pull ở bước 1
+# Local model — must match exactly what you pulled in step 1
 model=qwen2.5-coder:7b
 
-# Trỏ vào claude-code-router thay vì api.anthropic.com
+# Point at claude-code-router instead of api.anthropic.com
 base_url=http://127.0.0.1:3456
 
-# Proxy local không cần token thật, nhưng KEY phải khác rỗng
+# A local proxy needs no real token, but the KEY must be non-empty
 key=dummy
 
-# QUAN TRỌNG: để TRỐNG oauth_token, nếu không agent sẽ ưu tiên đăng nhập Claude
+# IMPORTANT: leave oauth_token EMPTY, otherwise the agent prefers Claude login
 oauth_token=
 ```
 
-Giữ nguyên `python=` và `script=` như cũ.
+Keep `python=` and `script=` as they were.
 
-> **Cơ chế:** `ide_agent.py` đọc `base_url=` từ file này *trước khi* mặc định về
-> `api.anthropic.com`. Để trống `oauth_token` khiến plugin đặt
-> `CLAUDE_CODE_OAUTH_TOKEN=""` (rỗng → bị coi là không có) nên `key=dummy` mới
-> được dùng làm `ANTHROPIC_API_KEY` gửi cho proxy.
-
----
-
-## 4. Chạy thử
-
-1. `ccr start` đang chạy (bước 2), Ollama đang chạy (bước 1).
-2. Mở GAMA → view **Claude Chat** → gõ "hello" thử.
-3. Lần đầu Ollama nạp model vào RAM/VRAM nên **trả lời chậm vài chục giây** — bình thường.
-
-Muốn **quay lại Claude**: xoá dòng `base_url=`, điền lại `oauth_token=` (token
-subscription), đổi `model=claude-opus-4-8`, rồi khởi động lại GAMA.
+> **How it works:** `ide_agent.py` reads `base_url=` from this file *before*
+> defaulting to `api.anthropic.com`. Leaving `oauth_token` empty makes the plugin
+> set `CLAUDE_CODE_OAUTH_TOKEN=""` (empty → treated as absent), so `key=dummy`
+> gets used as the `ANTHROPIC_API_KEY` sent to the proxy.
 
 ---
 
-## 5. Gỡ lỗi nhanh
+## 4. Try it
 
-| Triệu chứng | Nguyên nhân thường gặp |
+1. `ccr start` is running (step 2), Ollama is running (step 1).
+2. Open GAMA → the **Claude Chat** view → type "hello".
+3. On the first message Ollama loads the model into RAM/VRAM, so the **reply
+   takes a few dozen seconds** — that's normal.
+
+To **switch back to Claude**: remove the `base_url=` line, put your subscription
+token back in `oauth_token=`, set `model=claude-opus-4-8`, then restart GAMA.
+
+---
+
+## 5. Quick troubleshooting
+
+| Symptom | Common cause |
 |---|---|
-| Chat báo lỗi kết nối / 404 | `ccr start` chưa chạy, hoặc `base_url` sai cổng |
-| "model not found" | Tên `model=` không khớp `ollama list`; phải y hệt, kể cả `:7b` |
-| Đòi đăng nhập / lỗi 401 | Quên để trống `oauth_token`, hoặc `key=` bị rỗng |
-| Trả lời được nhưng **không sửa được file / không gọi tool** | Model quá nhỏ — xem mục dưới |
-| Rất chậm | Model to hơn RAM/VRAM → Ollama tràn ra CPU; dùng model nhỏ hơn |
+| Chat shows a connection error / 404 | `ccr start` isn't running, or `base_url` has the wrong port |
+| "model not found" | `model=` doesn't match `ollama list`; must be identical, including `:7b` |
+| Asks you to log in / 401 error | Forgot to leave `oauth_token` empty, or `key=` is empty |
+| Replies, but **won't edit files / doesn't call tools** | Model too small — see the section below |
+| Very slow | Model bigger than your RAM/VRAM → Ollama spills to CPU; use a smaller model |
 
-Xem log agent tại `%TEMP%\gama_claude_agent.log` (Windows) để biết chi tiết.
+Check the agent log at `%TEMP%\gama_claude_agent.log` (Windows) for details.
 
 ---
 
-## 6. Nó chạy được tới đâu (đọc kỹ)
+## 6. How far it actually goes (please read)
 
-Plugin này là **agent làm việc**, không chỉ chatbot: nó gọi rất nhiều tool
-(validate GAML, chạy headless, đọc console, sim bridge, sửa file + undo…) trong
-một vòng lặp nhiều bước.
+This plugin is a **working agent**, not just a chatbot: it calls many tools
+(validate GAML, run headless, read the console, the live-simulation bridge, edit
+files + undo…) in a multi-step loop.
 
-- Model local **7–8B gọi tool khá tệ** — hay gọi sai tham số hoặc quên gọi. Nên
-  **hỏi đáp / giải thích GAML thì ổn**, còn **tự dò lỗi rồi sửa model như Claude
-  Opus thì đừng mong**.
-- Muốn khá hơn: lên `qwen2.5-coder:14b`/`32b` nếu máy đủ khỏe. Vẫn kém Opus.
-- Toàn bộ tính năng "xịn" của plugin (auto-fix, live simulation, snapshot) được
-  thiết kế và kiểm thử trên Claude. Ollama là phương án "chữa cháy khi offline /
-  không có subscription", không phải thay thế ngang.
+- Local **7–8B models are fairly poor at tool-calling** — they often pass wrong
+  arguments or forget to call a tool. So **Q&A / explaining GAML is fine**, but
+  **don't expect it to diagnose and fix a model on its own like Claude Opus**.
+- Want it better: move up to `qwen2.5-coder:14b`/`32b` if your machine can handle
+  it. Still weaker than Opus.
+- All the "premium" features of the plugin (auto-fix, live simulation, snapshots)
+  were designed and tested against Claude. Ollama is a "when you're offline / have
+  no subscription" fallback, not an equal replacement.
 
-Nếu chỉ cần chất lượng, cứ dùng Claude theo `README.md`.
+If you just want quality, use Claude as described in `README.md`.
